@@ -26,15 +26,26 @@
                 <input id="contourToggleInput" type="checkbox" checked />
                 等高線を表示
             </label>
+            <label class="checkbox-label">
+                <input id="climateToggleInput" type="checkbox" checked />
+                気候レイヤーを表示
+            </label>
+            <label class="checkbox-label">
+                <input id="windToggleInput" type="checkbox" />
+                風レイヤーを表示
+            </label>
             <label>
                 等高線数
                 <input id="contourCountInput" type="number" min="2" max="12" step="1" value="6" />
             </label>
             <button id="generateBtn" type="button">生成</button>
             <button id="downloadBtn" type="button">SVG保存</button>
-            <p id="loadingIndicator" class="loading-indicator" role="status" aria-live="polite" hidden>
-                生成中...
-            </p>
+            <div id="progressWrap" class="progress-wrap" hidden>
+                <progress id="progressBar" max="100" value="0"></progress>
+                <p id="loadingIndicator" class="loading-indicator" role="status" aria-live="polite">
+                    生成中...
+                </p>
+            </div>
         </section>
 
         <section class="preview" aria-label="SVGプレビュー">

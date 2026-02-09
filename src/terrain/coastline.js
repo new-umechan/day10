@@ -115,51 +115,159 @@ function pointInWrappedPolygon(px, py, polygon, gw) {
         || pointInPolygon(px + gw, py, polygon);
 }
 
-function rasterizeShapes(shapes, scale, gw, gh, exclusionMask) {
-    const mask = new Uint8Array(gw * gh);
-    const scaled = [];
-    let filled = 0;
-    for (let i = 0; i < shapes.length; i += 1) {
-        scaled.push(scaleShapePoints(shapes[i], scale));
+function polygonBounds(points) {
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (let i = 0; i < points.length; i += 1) {
+        const p = points[i];
+        if (p.x < minX) {
+            minX = p.x;
+        }
+        if (p.x > maxX) {
+            maxX = p.x;
+        }
+        if (p.y < minY) {
+            minY = p.y;
+        }
+        if (p.y > maxY) {
+            maxY = p.y;
+        }
     }
 
-    for (let y = 0; y < gh; y += 1) {
+    return { minX, maxX, minY, maxY };
+}
+
+function buildShiftedPolygon(points, dx) {
+    if (dx === 0) {
+        return points;
+    }
+    const shifted = new Array(points.length);
+    for (let i = 0; i < points.length; i += 1) {
+        shifted[i] = { x: points[i].x + dx, y: points[i].y };
+    }
+    return shifted;
+}
+
+function paintPolygonMask(mask, gw, gh, polygon, bounds, exclusionMask, sampleStep) {
+    const xMin = Math.max(0, Math.floor(bounds.minX));
+    const xMax = Math.min(gw - 1, Math.ceil(bounds.maxX));
+    const yMin = Math.max(0, Math.floor(bounds.minY));
+    const yMax = Math.min(gh - 1, Math.ceil(bounds.maxY));
+    if (xMin > xMax || yMin > yMax) {
+        return 0;
+    }
+
+    let painted = 0;
+    for (let y = yMin; y <= yMax; y += sampleStep) {
         const py = y + 0.5;
-        for (let x = 0; x < gw; x += 1) {
+        for (let x = xMin; x <= xMax; x += sampleStep) {
             const idx = indexOf(x, y, gw);
             if (exclusionMask && exclusionMask[idx] === 1) {
                 continue;
             }
-            const px = x + 0.5;
-            for (let i = 0; i < scaled.length; i += 1) {
-                if (pointInWrappedPolygon(px, py, scaled[i], gw)) {
-                    mask[idx] = 1;
-                    filled += 1;
-                    break;
-                }
+            if (mask[idx] === 1) {
+                continue;
             }
+            if (pointInPolygon(x + 0.5, py, polygon)) {
+                mask[idx] = 1;
+                painted += 1;
+            }
+        }
+    }
+
+    return painted;
+}
+
+function rasterizeShapes(shapes, scale, gw, gh, exclusionMask) {
+    const mask = new Uint8Array(gw * gh);
+    let filled = 0;
+
+    for (let i = 0; i < shapes.length; i += 1) {
+        const base = scaleShapePoints(shapes[i], scale);
+        const baseBounds = polygonBounds(base);
+        const shifts = [0, -gw, gw];
+
+        for (let s = 0; s < shifts.length; s += 1) {
+            const dx = shifts[s];
+            const shiftedBounds = {
+                minX: baseBounds.minX + dx,
+                maxX: baseBounds.maxX + dx,
+                minY: baseBounds.minY,
+                maxY: baseBounds.maxY,
+            };
+            if (shiftedBounds.maxX < 0 || shiftedBounds.minX >= gw) {
+                continue;
+            }
+            if (shiftedBounds.maxY < 0 || shiftedBounds.minY >= gh) {
+                continue;
+            }
+
+            const shiftedPolygon = buildShiftedPolygon(base, dx);
+            filled += paintPolygonMask(mask, gw, gh, shiftedPolygon, shiftedBounds, exclusionMask, 1);
         }
     }
 
     return { mask, ratio: filled / (gw * gh) };
 }
 
-function findMaskForTargetRatio(targetRatio, rasterizeByScale) {
+function rasterizeShapesRatio(shapes, scale, gw, gh, exclusionMask, sampleStep) {
+    const mask = new Uint8Array(gw * gh);
+    let filled = 0;
+    let samples = 0;
+
+    for (let y = 0; y < gh; y += sampleStep) {
+        for (let x = 0; x < gw; x += sampleStep) {
+            samples += 1;
+        }
+    }
+
+    for (let i = 0; i < shapes.length; i += 1) {
+        const base = scaleShapePoints(shapes[i], scale);
+        const baseBounds = polygonBounds(base);
+        const shifts = [0, -gw, gw];
+
+        for (let s = 0; s < shifts.length; s += 1) {
+            const dx = shifts[s];
+            const shiftedBounds = {
+                minX: baseBounds.minX + dx,
+                maxX: baseBounds.maxX + dx,
+                minY: baseBounds.minY,
+                maxY: baseBounds.maxY,
+            };
+            if (shiftedBounds.maxX < 0 || shiftedBounds.minX >= gw) {
+                continue;
+            }
+            if (shiftedBounds.maxY < 0 || shiftedBounds.minY >= gh) {
+                continue;
+            }
+
+            const shiftedPolygon = buildShiftedPolygon(base, dx);
+            filled += paintPolygonMask(mask, gw, gh, shiftedPolygon, shiftedBounds, exclusionMask, sampleStep);
+        }
+    }
+
+    return samples > 0 ? filled / samples : 0;
+}
+
+function findMaskForTargetRatio(targetRatio, evaluateRatioByScale, rasterizeMaskByScale) {
     let low = 0.35;
     let high = 2.8;
-    let bestMask = null;
+    let bestScale = (low + high) * 0.5;
     let bestRatio = 0;
     let bestDiff = Number.POSITIVE_INFINITY;
+    const searchSteps = 4;
 
-    for (let i = 0; i < 12; i += 1) {
+    for (let i = 0; i < searchSteps; i += 1) {
         const mid = (low + high) * 0.5;
-        const result = rasterizeByScale(mid);
-        const ratio = result.ratio;
+        const ratio = evaluateRatioByScale(mid);
         const diff = Math.abs(targetRatio - ratio);
 
         if (diff < bestDiff) {
             bestDiff = diff;
-            bestMask = result.mask;
+            bestScale = mid;
             bestRatio = ratio;
         }
 
@@ -170,12 +278,15 @@ function findMaskForTargetRatio(targetRatio, rasterizeByScale) {
         }
     }
 
-    return { mask: bestMask, ratio: bestRatio };
+    const final = rasterizeMaskByScale(bestScale);
+    return { mask: final.mask, ratio: final.ratio ?? bestRatio };
 }
 
 export function findShapeScaleForTarget(shapes, gw, gh, targetRatio, exclusionMask) {
+    const sampleStep = 2;
     return findMaskForTargetRatio(
         targetRatio,
+        (scale) => rasterizeShapesRatio(shapes, scale, gw, gh, exclusionMask, sampleStep),
         (scale) => rasterizeShapes(shapes, scale, gw, gh, exclusionMask),
     );
 }
@@ -225,9 +336,57 @@ function rasterizeBlobs(blobs, scale, gw, gh, exclusionMask) {
     return { mask, ratio: filled / (gw * gh) };
 }
 
+function downsampleMask(mask, gw, gh, sampleStep) {
+    if (!mask) {
+        return null;
+    }
+    const sw = Math.ceil(gw / sampleStep);
+    const sh = Math.ceil(gh / sampleStep);
+    const out = new Uint8Array(sw * sh);
+
+    for (let sy = 0; sy < sh; sy += 1) {
+        const y = Math.min(gh - 1, sy * sampleStep);
+        for (let sx = 0; sx < sw; sx += 1) {
+            const x = Math.min(gw - 1, sx * sampleStep);
+            out[indexOf(sx, sy, sw)] = mask[indexOf(x, y, gw)];
+        }
+    }
+
+    return out;
+}
+
+function rasterizeBlobsRatio(blobs, scale, gw, gh, exclusionMask, sampleStep) {
+    const sw = Math.ceil(gw / sampleStep);
+    const sh = Math.ceil(gh / sampleStep);
+    const coarseMask = new Uint8Array(sw * sh);
+    const coarseExclusion = downsampleMask(exclusionMask, gw, gh, sampleStep);
+    let filled = 0;
+
+    for (let i = 0; i < blobs.length; i += 1) {
+        const blob = blobs[i];
+        filled += paintEllipseBlob(
+            coarseMask,
+            sw,
+            sh,
+            {
+                cx: blob.cx / sampleStep,
+                cy: blob.cy / sampleStep,
+                rx: blob.rx / sampleStep,
+                ry: blob.ry / sampleStep,
+            },
+            scale,
+            coarseExclusion,
+        );
+    }
+
+    return (sw * sh) > 0 ? filled / (sw * sh) : 0;
+}
+
 export function findScaleForTarget(blobs, gw, gh, targetRatio, exclusionMask) {
+    const sampleStep = 2;
     return findMaskForTargetRatio(
         targetRatio,
+        (scale) => rasterizeBlobsRatio(blobs, scale, gw, gh, exclusionMask, sampleStep),
         (scale) => rasterizeBlobs(blobs, scale, gw, gh, exclusionMask),
     );
 }

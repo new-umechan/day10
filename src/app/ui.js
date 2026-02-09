@@ -1,4 +1,4 @@
-import { generateCoastlineSvg } from "./generate.js";
+import { generateCoastlineSvgInSteps } from "./generate.js";
 import { readSettings } from "./state.js";
 
 export function initUI() {
@@ -7,10 +7,14 @@ export function initUI() {
         widthInput: document.getElementById("widthInput"),
         heightInput: document.getElementById("heightInput"),
         contourToggleInput: document.getElementById("contourToggleInput"),
+        climateToggleInput: document.getElementById("climateToggleInput"),
+        windToggleInput: document.getElementById("windToggleInput"),
         contourCountInput: document.getElementById("contourCountInput"),
         generateBtn: document.getElementById("generateBtn"),
         downloadBtn: document.getElementById("downloadBtn"),
         svgHost: document.getElementById("svgHost"),
+        progressWrap: document.getElementById("progressWrap"),
+        progressBar: document.getElementById("progressBar"),
         loadingIndicator: document.getElementById("loadingIndicator"),
     };
 
@@ -23,6 +27,12 @@ export function initUI() {
         if (elements.contourToggleInput) {
             elements.contourToggleInput.disabled = isLoading;
         }
+        if (elements.climateToggleInput) {
+            elements.climateToggleInput.disabled = isLoading;
+        }
+        if (elements.windToggleInput) {
+            elements.windToggleInput.disabled = isLoading;
+        }
         if (elements.contourCountInput) {
             const disableCount = isLoading
                 || (elements.contourToggleInput && !elements.contourToggleInput.checked);
@@ -31,25 +41,43 @@ export function initUI() {
         if (elements.loadingIndicator) {
             elements.loadingIndicator.hidden = !isLoading;
         }
+        if (elements.progressWrap) {
+            elements.progressWrap.hidden = !isLoading;
+        }
     }
 
-    function generateCoastline() {
+    function updateProgress(progress, label) {
+        if (elements.progressBar) {
+            elements.progressBar.value = progress;
+        }
+        if (elements.loadingIndicator) {
+            elements.loadingIndicator.textContent = `${label} (${Math.round(progress)}%)`;
+        }
+    }
+
+    async function generateCoastline() {
         if (isGenerating) {
             return;
         }
 
         isGenerating = true;
         setLoadingState(true);
-        requestAnimationFrame(() => {
-            try {
-                const settings = readSettings(elements);
-                currentSvg = generateCoastlineSvg(settings);
-                elements.svgHost.replaceChildren(currentSvg);
-            } finally {
-                isGenerating = false;
-                setLoadingState(false);
-            }
-        });
+        updateProgress(0, "生成準備中");
+        try {
+            const settings = readSettings(elements);
+            currentSvg = await generateCoastlineSvgInSteps(settings, ({ progress, label, svg }) => {
+                updateProgress(progress, label);
+                if (svg) {
+                    currentSvg = svg;
+                    elements.svgHost.replaceChildren(svg);
+                }
+            });
+            elements.svgHost.replaceChildren(currentSvg);
+        } finally {
+            isGenerating = false;
+            setLoadingState(false);
+            updateProgress(0, "生成中...");
+        }
     }
 
     function downloadCurrentSvg() {
@@ -78,6 +106,16 @@ export function initUI() {
     elements.downloadBtn.addEventListener("click", downloadCurrentSvg);
     if (elements.contourToggleInput) {
         elements.contourToggleInput.addEventListener("change", () => {
+            setLoadingState(false);
+        });
+    }
+    if (elements.climateToggleInput) {
+        elements.climateToggleInput.addEventListener("change", () => {
+            setLoadingState(false);
+        });
+    }
+    if (elements.windToggleInput) {
+        elements.windToggleInput.addEventListener("change", () => {
             setLoadingState(false);
         });
     }
