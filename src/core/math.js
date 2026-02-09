@@ -27,7 +27,7 @@ export function wrapDeltaX(dx, gw) {
 }
 
 export function createGridSize(width, height) {
-    const gw = 320;
-    const gh = clamp(Math.round((gw * height) / width), 120, 220);
+    const gw = 420;
+    const gh = clamp(Math.round((gw * height) / width), 150, 300);
     return { gw, gh };
 }

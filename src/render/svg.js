@@ -1,5 +1,4 @@
 import { polygonArea, gridToWorld, removeCollinear } from "../terrain/geometry.js";
-import { extractBoundaryLoops } from "../terrain/mask.js";
 import { CLIMATE_ZONE } from "../terrain/climate.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -13,6 +12,225 @@ function loopToPathSegment(points) {
         d += ` L ${points[i].x.toFixed(2)} ${points[i].y.toFixed(2)}`;
     }
     return `${d} Z`;
+}
+
+function fractalNoise01(x, y, seed) {
+    const v = Math.sin(x * 12.9898 + y * 78.233 + seed * 37.719) * 43758.5453;
+    return v - Math.floor(v);
+}
+
+function chaikinSmoothClosedLoop(points, iterations) {
+    let working = points;
+    for (let it = 0; it < iterations; it += 1) {
+        if (!working || working.length < 4) {
+            break;
+        }
+        const next = [];
+        const n = working.length;
+        for (let i = 0; i < n; i += 1) {
+            const a = working[i];
+            const b = working[(i + 1) % n];
+            next.push({
+                x: a.x * 0.75 + b.x * 0.25,
+                y: a.y * 0.75 + b.y * 0.25,
+            });
+            next.push({
+                x: a.x * 0.25 + b.x * 0.75,
+                y: a.y * 0.25 + b.y * 0.75,
+            });
+        }
+        working = next;
+    }
+    return working;
+}
+
+function fractalizeClosedLoop(points, width, height, amplitude, iterations) {
+    if (!points || points.length < 3 || amplitude <= 0 || iterations <= 0) {
+        return points;
+    }
+
+    let working = points;
+    let amp = amplitude;
+
+    for (let it = 0; it < iterations; it += 1) {
+        const next = [];
+        const n = working.length;
+        for (let i = 0; i < n; i += 1) {
+            const a = working[i];
+            const b = working[(i + 1) % n];
+            next.push(a);
+
+            const mx = (a.x + b.x) * 0.5;
+            const my = (a.y + b.y) * 0.5;
+            const jx = (fractalNoise01(mx, my, i + it * 97) * 2 - 1) * amp;
+            const jy = (fractalNoise01(mx, my, i + it * 149 + 11) * 2 - 1) * amp;
+            next.push({
+                x: Math.max(0, Math.min(width, mx + jx)),
+                y: Math.max(0, Math.min(height, my + jy)),
+            });
+        }
+        working = next;
+        amp *= 0.55;
+    }
+
+    return working;
+}
+
+function pointKey(p) {
+    return `${p.x.toFixed(3)},${p.y.toFixed(3)}`;
+}
+
+function edgePointForMarching(edge, x, y, gw, gh) {
+    let px = x + 1;
+    let py = y + 1;
+    if (edge === 0) {
+        px = x + 1.0;
+        py = y + 0.5;
+    } else if (edge === 1) {
+        px = x + 1.5;
+        py = y + 1.0;
+    } else if (edge === 2) {
+        px = x + 1.0;
+        py = y + 1.5;
+    } else if (edge === 3) {
+        px = x + 0.5;
+        py = y + 1.0;
+    }
+    return {
+        x: Math.max(0, Math.min(gw, px)),
+        y: Math.max(0, Math.min(gh, py)),
+    };
+}
+
+function marchingSegmentsForCase(caseId, x, y) {
+    switch (caseId) {
+    case 0:
+    case 15:
+        return [];
+    case 1:
+        return [[3, 0]];
+    case 2:
+        return [[0, 1]];
+    case 3:
+        return [[3, 1]];
+    case 4:
+        return [[1, 2]];
+    case 5:
+        return (x + y) % 2 === 0 ? [[3, 0], [1, 2]] : [[3, 2], [0, 1]];
+    case 6:
+        return [[0, 2]];
+    case 7:
+        return [[3, 2]];
+    case 8:
+        return [[2, 3]];
+    case 9:
+        return [[0, 2]];
+    case 10:
+        return (x + y) % 2 === 0 ? [[0, 1], [2, 3]] : [[3, 0], [1, 2]];
+    case 11:
+        return [[1, 2]];
+    case 12:
+        return [[1, 3]];
+    case 13:
+        return [[0, 1]];
+    case 14:
+        return [[3, 0]];
+    default:
+        return [];
+    }
+}
+
+function extractMarchingSquaresLoops(mask, gw, gh) {
+    function sample(x, y) {
+        if (x < 0 || x >= gw || y < 0 || y >= gh) {
+            return 0;
+        }
+        return mask[y * gw + x] === 1 ? 1 : 0;
+    }
+
+    const segments = [];
+    const byPoint = new Map();
+
+    function addSegment(a, b) {
+        const idx = segments.length;
+        segments.push({ a, b });
+        const ka = pointKey(a);
+        const kb = pointKey(b);
+        if (!byPoint.has(ka)) {
+            byPoint.set(ka, []);
+        }
+        if (!byPoint.has(kb)) {
+            byPoint.set(kb, []);
+        }
+        byPoint.get(ka).push(idx);
+        byPoint.get(kb).push(idx);
+    }
+
+    for (let y = -1; y < gh; y += 1) {
+        for (let x = -1; x < gw; x += 1) {
+            const tl = sample(x, y);
+            const tr = sample(x + 1, y);
+            const br = sample(x + 1, y + 1);
+            const bl = sample(x, y + 1);
+            const caseId = tl | (tr << 1) | (br << 2) | (bl << 3);
+            const pairs = marchingSegmentsForCase(caseId, x, y);
+            for (let i = 0; i < pairs.length; i += 1) {
+                const pair = pairs[i];
+                const a = edgePointForMarching(pair[0], x, y, gw, gh);
+                const b = edgePointForMarching(pair[1], x, y, gw, gh);
+                addSegment(a, b);
+            }
+        }
+    }
+
+    const used = new Uint8Array(segments.length);
+    const loops = [];
+
+    for (let i = 0; i < segments.length; i += 1) {
+        if (used[i] === 1) {
+            continue;
+        }
+
+        used[i] = 1;
+        const startSeg = segments[i];
+        const path = [startSeg.a, startSeg.b];
+        const startKey = pointKey(startSeg.a);
+        let current = startSeg.b;
+        let guard = 0;
+
+        while (guard < 200000) {
+            guard += 1;
+            const key = pointKey(current);
+            const candidates = byPoint.get(key) || [];
+            let nextIdx = -1;
+            for (let c = 0; c < candidates.length; c += 1) {
+                const si = candidates[c];
+                if (used[si] === 0) {
+                    nextIdx = si;
+                    break;
+                }
+            }
+            if (nextIdx === -1) {
+                break;
+            }
+            used[nextIdx] = 1;
+            const seg = segments[nextIdx];
+            const aKey = pointKey(seg.a);
+            const next = aKey === key ? seg.b : seg.a;
+            path.push(next);
+            current = next;
+            if (pointKey(current) === startKey) {
+                break;
+            }
+        }
+
+        if (path.length >= 4 && pointKey(path[path.length - 1]) === startKey) {
+            path.pop();
+            loops.push(path);
+        }
+    }
+
+    return loops;
 }
 
 function createLatitudeGuides(width, height) {
@@ -33,9 +251,10 @@ function buildZonePathData(zone, climateLayerOptions, width, height) {
         zoneMask[i] = rawMask[i] === 1 && zoneField[i] === zone ? 1 : 0;
     }
 
-    const rawLoops = extractBoundaryLoops(zoneMask, climateLayerOptions.gw, climateLayerOptions.gh);
+    const rawLoops = extractMarchingSquaresLoops(zoneMask, climateLayerOptions.gw, climateLayerOptions.gh);
     const worldLoops = [];
     const minArea = width * height * 0.000018;
+    const fractalAmp = Math.max(0.6, Math.min(width, height) / 1200);
 
     for (let i = 0; i < rawLoops.length; i += 1) {
         const cleaned = removeCollinear(rawLoops[i]);
@@ -47,7 +266,9 @@ function buildZonePathData(zone, climateLayerOptions, width, height) {
             climateLayerOptions.gh,
         );
         if (polygonArea(world) >= minArea) {
-            worldLoops.push(world);
+            const smoothedA = chaikinSmoothClosedLoop(world, 2);
+            const detailed = fractalizeClosedLoop(smoothedA, width, height, fractalAmp, 2);
+            worldLoops.push(detailed);
         }
     }
 
@@ -106,9 +327,10 @@ function buildCountryPathData(countryId, climateLayerOptions, width, height) {
         countryMask[i] = rawMask[i] === 1 && ownerField[i] === countryId ? 1 : 0;
     }
 
-    const rawLoops = extractBoundaryLoops(countryMask, climateLayerOptions.gw, climateLayerOptions.gh);
+    const rawLoops = extractMarchingSquaresLoops(countryMask, climateLayerOptions.gw, climateLayerOptions.gh);
     const worldLoops = [];
     const minArea = width * height * 0.00001;
+    const fractalAmp = Math.max(0.55, Math.min(width, height) / 1250);
 
     for (let i = 0; i < rawLoops.length; i += 1) {
         const cleaned = removeCollinear(rawLoops[i]);
@@ -120,7 +342,9 @@ function buildCountryPathData(countryId, climateLayerOptions, width, height) {
             climateLayerOptions.gh,
         );
         if (polygonArea(world) >= minArea) {
-            worldLoops.push(world);
+            const smoothedA = chaikinSmoothClosedLoop(world, 2);
+            const detailed = fractalizeClosedLoop(smoothedA, width, height, fractalAmp, 2);
+            worldLoops.push(detailed);
         }
     }
 
