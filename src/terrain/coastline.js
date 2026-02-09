@@ -1,4 +1,5 @@
 import { clamp, indexOf, wrapX } from "../core/math.js";
+import { COASTLINE_PARAMS } from "../config/coastline.js";
 
 function createInitialLoop(random, cx, cy, rx, ry, count) {
     const points = [];
@@ -188,7 +189,7 @@ function rasterizeShapes(shapes, scale, gw, gh, exclusionMask) {
     for (let i = 0; i < shapes.length; i += 1) {
         const base = scaleShapePoints(shapes[i], scale);
         const baseBounds = polygonBounds(base);
-        const shifts = [0, -gw, gw];
+        const shifts = COASTLINE_PARAMS.wrapShifts.map((s) => s * gw);
 
         for (let s = 0; s < shifts.length; s += 1) {
             const dx = shifts[s];
@@ -227,7 +228,7 @@ function rasterizeShapesRatio(shapes, scale, gw, gh, exclusionMask, sampleStep) 
     for (let i = 0; i < shapes.length; i += 1) {
         const base = scaleShapePoints(shapes[i], scale);
         const baseBounds = polygonBounds(base);
-        const shifts = [0, -gw, gw];
+        const shifts = COASTLINE_PARAMS.wrapShifts.map((s) => s * gw);
 
         for (let s = 0; s < shifts.length; s += 1) {
             const dx = shifts[s];
@@ -253,12 +254,12 @@ function rasterizeShapesRatio(shapes, scale, gw, gh, exclusionMask, sampleStep) 
 }
 
 function findMaskForTargetRatio(targetRatio, evaluateRatioByScale, rasterizeMaskByScale) {
-    let low = 0.35;
-    let high = 2.8;
+    let low = COASTLINE_PARAMS.scaleSearch.low;
+    let high = COASTLINE_PARAMS.scaleSearch.high;
     let bestScale = (low + high) * 0.5;
     let bestRatio = 0;
     let bestDiff = Number.POSITIVE_INFINITY;
-    const searchSteps = 4;
+    const searchSteps = COASTLINE_PARAMS.scaleSearch.steps;
 
     for (let i = 0; i < searchSteps; i += 1) {
         const mid = (low + high) * 0.5;
@@ -283,7 +284,7 @@ function findMaskForTargetRatio(targetRatio, evaluateRatioByScale, rasterizeMask
 }
 
 export function findShapeScaleForTarget(shapes, gw, gh, targetRatio, exclusionMask) {
-    const sampleStep = 2;
+    const sampleStep = COASTLINE_PARAMS.scaleSearch.shapeSampleStep;
     return findMaskForTargetRatio(
         targetRatio,
         (scale) => rasterizeShapesRatio(shapes, scale, gw, gh, exclusionMask, sampleStep),
@@ -383,7 +384,7 @@ function rasterizeBlobsRatio(blobs, scale, gw, gh, exclusionMask, sampleStep) {
 }
 
 export function findScaleForTarget(blobs, gw, gh, targetRatio, exclusionMask) {
-    const sampleStep = 2;
+    const sampleStep = COASTLINE_PARAMS.scaleSearch.blobSampleStep;
     return findMaskForTargetRatio(
         targetRatio,
         (scale) => rasterizeBlobsRatio(blobs, scale, gw, gh, exclusionMask, sampleStep),

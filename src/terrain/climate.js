@@ -1,4 +1,5 @@
 import { clamp, indexOf, wrapX } from "../core/math.js";
+import { CLIMATE_PARAMS } from "../config/climate.js";
 
 export const CLIMATE_ZONE = {
     SEA: 0,
@@ -38,32 +39,34 @@ function gaussian(x, center, sigma) {
 }
 
 function basePrecipitationMm(absLat) {
-    const equatorialWet = gaussian(absLat, 6, 13);
-    const subtropicalDry = gaussian(absLat, 27, 9.5);
-    const midLatitudeWet = gaussian(absLat, 50, 13);
-    const polarDry = clamp((absLat - 55) / 30, 0, 1);
+    const p = CLIMATE_PARAMS.precipitation;
+    const equatorialWet = gaussian(absLat, p.equatorialWet.center, p.equatorialWet.sigma);
+    const subtropicalDry = gaussian(absLat, p.subtropicalDry.center, p.subtropicalDry.sigma);
+    const midLatitudeWet = gaussian(absLat, p.midLatitudeWet.center, p.midLatitudeWet.sigma);
+    const polarDry = clamp((absLat - p.polarDry.startLat) / p.polarDry.span, 0, 1);
 
-    return 760
-        + equatorialWet * 1500
-        + midLatitudeWet * 520
-        - subtropicalDry * 640
-        - polarDry * 480;
+    return p.base
+        + equatorialWet * p.equatorialWet.amp
+        + midLatitudeWet * p.midLatitudeWet.amp
+        - subtropicalDry * p.subtropicalDry.amp
+        - polarDry * p.polarDry.amp;
 }
 
 function prevailingWind(latDeg) {
+    const p = CLIMATE_PARAMS.prevailingWind;
     const absLat = Math.abs(latDeg);
-    if (absLat < 30) {
-        return { wx: -1.0, wy: latDeg >= 0 ? -0.25 : 0.25 };
+    if (absLat < p.tropicalMaxLat) {
+        return { wx: p.tropical.wx, wy: latDeg >= 0 ? p.tropical.northWy : p.tropical.southWy };
     }
-    if (absLat < 60) {
-        return { wx: 1.0, wy: latDeg >= 0 ? 0.2 : -0.2 };
+    if (absLat < p.temperateMaxLat) {
+        return { wx: p.temperate.wx, wy: latDeg >= 0 ? p.temperate.northWy : p.temperate.southWy };
     }
-    return { wx: -0.85, wy: latDeg >= 0 ? -0.15 : 0.15 };
+    return { wx: p.polar.wx, wy: latDeg >= 0 ? p.polar.northWy : p.polar.southWy };
 }
 
 function rainShadowPenaltyFromWind(x, y, gw, gh, elevationField, wind, scale) {
-    const steps = 6;
-    const stepLength = 2.4;
+    const steps = CLIMATE_PARAMS.rainShadow.steps;
+    const stepLength = CLIMATE_PARAMS.rainShadow.stepLength;
     const cellElevation = elevationField[indexOf(x, y, gw)];
     let upwindMax = 0;
 
@@ -82,7 +85,7 @@ function rainShadowPenaltyFromWind(x, y, gw, gh, elevationField, wind, scale) {
 
 function rainShadowPenaltyMm(x, y, gw, gh, elevationField, latDeg) {
     const wind = prevailingWind(latDeg);
-    return rainShadowPenaltyFromWind(x, y, gw, gh, elevationField, wind, 1160);
+    return rainShadowPenaltyFromWind(x, y, gw, gh, elevationField, wind, CLIMATE_PARAMS.rainShadow.baseScale);
 }
 
 function isSea(landMask, x, y, gw, gh) {
@@ -103,7 +106,7 @@ function eastCoastSeaExposure(landMask, x, y, gw, gh) {
 function directionalSeaExposure(landMask, x, y, gw, gh, dirX) {
     let seaCount = 0;
     let samples = 0;
-    const scan = 4;
+    const scan = CLIMATE_PARAMS.coastalExposure.scan;
 
     for (let dx = 1; dx <= scan; dx += 1) {
         for (let oy = -1; oy <= 1; oy += 1) {
@@ -119,42 +122,49 @@ function directionalSeaExposure(landMask, x, y, gw, gh, dirX) {
 }
 
 function coldCoastalDesertSignal(absLat, coastDist, seaTempC, westExposure) {
-    if (absLat < 15 || absLat > 38 || coastDist > 0.16) {
+    const p = CLIMATE_PARAMS.coldCoastalDesert;
+    if (absLat < p.minLat || absLat > p.maxLat || coastDist > p.maxCoastDist) {
         return 0;
     }
-    const latBand = 1 - Math.min(1, Math.abs(absLat - 25) / 13);
-    const coldSea = clamp((21 - seaTempC) / 9, 0, 1);
-    const coastal = clamp((0.16 - coastDist) / 0.16, 0, 1);
+    const latBand = 1 - Math.min(1, Math.abs(absLat - p.latCenter) / p.latHalfWidth);
+    const coldSea = clamp((p.coldSeaBase - seaTempC) / p.coldSeaSpan, 0, 1);
+    const coastal = clamp((p.maxCoastDist - coastDist) / p.maxCoastDist, 0, 1);
     return latBand * coldSea * coastal * westExposure;
 }
 
 function monsoonStrengthSignal(absLat, coastDist, tempSeaLevel, westExposure, eastExposure) {
-    if (absLat < 5 || absLat > 35) {
+    const p = CLIMATE_PARAMS.monsoon;
+    if (absLat < p.minLat || absLat > p.maxLat) {
         return 0;
     }
-    const latBand = gaussian(absLat, 18, 10);
-    const warmSeason = clamp((tempSeaLevel - 16) / 10, 0, 1);
-    const coastal = clamp((0.45 - coastDist) / 0.45, 0, 1);
+    const latBand = gaussian(absLat, p.latCenter, p.latSigma);
+    const warmSeason = clamp((tempSeaLevel - p.warmSeasonBase) / p.warmSeasonSpan, 0, 1);
+    const coastal = clamp((p.coastalMaxDist - coastDist) / p.coastalMaxDist, 0, 1);
     const directionalContrast = Math.abs(westExposure - eastExposure);
-    return latBand * warmSeason * coastal * (0.45 + directionalContrast * 0.55);
+    return latBand
+        * warmSeason
+        * coastal
+        * (p.directionalBase + directionalContrast * p.directionalContrastWeight);
 }
 
 function monsoonRainBoostMm(signal, coastDist) {
+    const p = CLIMATE_PARAMS.monsoon;
     if (signal <= 0) {
         return 0;
     }
-    const inlandFade = Math.pow(1 - clamp(coastDist, 0, 1), 1.1);
-    return signal * (260 + 380 * inlandFade);
+    const inlandFade = Math.pow(1 - clamp(coastDist, 0, 1), p.inlandFadePow);
+    return signal * (p.rainBoostBase + p.rainBoostInland * inlandFade);
 }
 
 function monsoonShadowPenaltyMm(x, y, gw, gh, elevationField, latDeg, westExposure, eastExposure, signal) {
-    if (signal <= 0.04) {
+    const p = CLIMATE_PARAMS.monsoon;
+    if (signal <= p.minSignalForShadow) {
         return 0;
     }
     const summerOnshoreX = westExposure >= eastExposure ? 1 : -1;
     const monsoonWind = {
-        wx: summerOnshoreX,
-        wy: latDeg >= 0 ? -0.22 : 0.22,
+        wx: summerOnshoreX * p.monsoonWind.wxOnshore,
+        wy: latDeg >= 0 ? p.monsoonWind.northWy : p.monsoonWind.southWy,
     };
     const rawPenalty = rainShadowPenaltyFromWind(
         x,
@@ -163,21 +173,22 @@ function monsoonShadowPenaltyMm(x, y, gw, gh, elevationField, latDeg, westExposu
         gh,
         elevationField,
         monsoonWind,
-        980,
+        CLIMATE_PARAMS.rainShadow.monsoonScale,
     );
-    return rawPenalty * (0.55 + signal * 0.85);
+    return rawPenalty * (p.shadowMixBase + signal * p.shadowMixWeight);
 }
 
 function computeWindVector(latDeg, westExposure, eastExposure, monsoonStrength) {
+    const p = CLIMATE_PARAMS.monsoon;
     const base = prevailingWind(latDeg);
     if (monsoonStrength <= 0.01) {
         return { ux: base.wx, uy: base.wy };
     }
 
     const summerOnshoreX = westExposure >= eastExposure ? 1 : -1;
-    const monsoonWx = summerOnshoreX;
-    const monsoonWy = latDeg >= 0 ? -0.22 : 0.22;
-    const mix = clamp(monsoonStrength * 0.85, 0, 0.78);
+    const monsoonWx = summerOnshoreX * p.monsoonWind.wxOnshore;
+    const monsoonWy = latDeg >= 0 ? p.monsoonWind.northWy : p.monsoonWind.southWy;
+    const mix = clamp(monsoonStrength * p.windMixWeight, 0, p.windMixMax);
 
     return {
         ux: base.wx * (1 - mix) + monsoonWx * mix,
@@ -186,30 +197,42 @@ function computeWindVector(latDeg, westExposure, eastExposure, monsoonStrength) 
 }
 
 function seasonAdjustForDryThreshold(absLat) {
-    if (absLat < 23.5) {
-        return 180;
+    const p = CLIMATE_PARAMS.dryThresholdSeasonAdj;
+    if (absLat < p.tropicalMaxLat) {
+        return p.tropicalAdj;
     }
-    if (absLat < 50) {
-        return 90;
+    if (absLat < p.temperateMaxLat) {
+        return p.temperateAdj;
     }
-    return 0;
+    return p.polarAdj;
 }
 
 function classifyTemperatureZone(tempMean, absLat) {
-    const amp = 3 + 15 * Math.pow(absLat / 90, 1.2);
+    const p = CLIMATE_PARAMS.temperatureZone;
+    const amp = p.ampBase + p.ampScale * Math.pow(absLat / 90, p.ampPow);
     const tempWarm = tempMean + amp;
     const tempCold = tempMean - amp;
 
-    if (absLat >= 78) {
+    if (absLat < p.polarMinLat) {
+        if (tempCold <= p.coldThreshold) {
+            return CLIMATE_ZONE.COLD;
+        }
+        if (tempCold < p.temperateThresholdLowLat) {
+            return CLIMATE_ZONE.TEMPERATE;
+        }
+        return CLIMATE_ZONE.TROPICAL;
+    }
+
+    if (absLat >= p.forcePolarLat) {
         return CLIMATE_ZONE.POLAR;
     }
-    if (tempWarm < 10 || (absLat >= 68 && tempWarm < 12)) {
+    if (tempWarm < p.warmPolarThreshold || (absLat >= p.highLatWarmCutoffLat && tempWarm < p.warmPolarThresholdHighLat)) {
         return CLIMATE_ZONE.POLAR;
     }
-    if (tempCold <= -8) {
+    if (tempCold <= p.coldThreshold) {
         return CLIMATE_ZONE.COLD;
     }
-    if (tempCold < 18) {
+    if (tempCold < p.temperateThresholdHighLat) {
         return CLIMATE_ZONE.TEMPERATE;
     }
     return CLIMATE_ZONE.TROPICAL;
@@ -229,7 +252,9 @@ export function buildClimateField(gw, gh, landMask, elevationField, coastDistanc
         const latDeg = toLatitudeDeg(y, gh);
         const absLat = Math.abs(latDeg);
         const baseWind = prevailingWind(latDeg);
-        const tempSeaLevel = 27 - 0.42 * absLat;
+        const thermal = CLIMATE_PARAMS.thermalModel;
+        const moisture = CLIMATE_PARAMS.moisture;
+        const tempSeaLevel = thermal.seaLevelBase - thermal.seaLevelLatGradient * absLat;
         const basePrecip = basePrecipitationMm(absLat);
         const drySeasonAdj = seasonAdjustForDryThreshold(absLat);
 
@@ -257,11 +282,16 @@ export function buildClimateField(gw, gh, landMask, elevationField, coastDistanc
             windUxField[idx] = wind.ux;
             windUyField[idx] = wind.uy;
 
-            const elevationM = elevationField[idx] * 3200;
-            const tempMean = tempSeaLevel - 5.8 * (elevationM / 1000);
+            const elevationM = elevationField[idx] * thermal.elevationScaleM;
+            const islandWarmBias = Math.pow(1 - normalizedCoastDist, thermal.islandWarmPow) * thermal.islandWarmAmp;
+            const tempMean = tempSeaLevel - thermal.lapseRatePerKm * (elevationM / 1000) + islandWarmBias;
             tempMeanCField[idx] = tempMean;
 
-            const coastMoisture = Math.pow(1 - normalizedCoastDist, 1.2) * 720;
+            const coastMoisture = Math.pow(1 - normalizedCoastDist, moisture.coastMoisturePow) * moisture.coastMoistureAmp;
+            const islandness = Math.min(westExposure, eastExposure);
+            const islandHumidityBoost = islandness
+                * Math.pow(1 - normalizedCoastDist, moisture.islandHumidityPow)
+                * moisture.islandHumidityAmp;
             const monsoonBoost = monsoonRainBoostMm(monsoonStrength, normalizedCoastDist);
             const shadowPenalty = rainShadowPenaltyMm(x, y, gw, gh, elevationField, latDeg);
             const monsoonShadowPenalty = monsoonShadowPenaltyMm(
@@ -276,37 +306,52 @@ export function buildClimateField(gw, gh, landMask, elevationField, coastDistanc
                 monsoonStrength,
             );
             const totalShadowPenalty = shadowPenalty + monsoonShadowPenalty;
-            const subtropicalDesert = gaussian(absLat, 26.5, 7.5);
+            const subtropicalDesert = gaussian(
+                absLat,
+                CLIMATE_PARAMS.precipitation.subtropicalDry.center,
+                CLIMATE_PARAMS.precipitation.subtropicalDry.sigma,
+            );
             const interiorDesert = Math.pow(normalizedCoastDist, 1.3);
-            const rainShadowDesert = clamp(totalShadowPenalty / 560, 0, 1);
+            const rainShadowDesert = clamp(
+                totalShadowPenalty / CLIMATE_PARAMS.rainShadow.desertNormalize,
+                0,
+                1,
+            );
             const coldCoastalDesert = coldCoastalDesertSignal(
                 absLat,
                 normalizedCoastDist,
                 tempSeaLevel,
                 westExposure,
             );
-            const desertPenalty = subtropicalDesert * 180
-                + interiorDesert * 620
-                + rainShadowDesert * 760
-                + coldCoastalDesert * 650;
+            const desertPenalty = subtropicalDesert * CLIMATE_PARAMS.desertPenalty.subtropical
+                + interiorDesert * CLIMATE_PARAMS.desertPenalty.interior
+                + rainShadowDesert * CLIMATE_PARAMS.desertPenalty.rainShadow
+                + coldCoastalDesert * CLIMATE_PARAMS.desertPenalty.coldCoastal;
             const precip = clamp(
-                basePrecip + coastMoisture + monsoonBoost - totalShadowPenalty - desertPenalty,
-                40,
-                3500,
+                basePrecip
+                    + coastMoisture
+                    + islandHumidityBoost
+                    + monsoonBoost
+                    - totalShadowPenalty
+                    - desertPenalty,
+                moisture.precipMin,
+                moisture.precipMax,
             );
             precipMmField[idx] = precip;
 
             const dryThresholdBase = Math.max(0, 20 * tempMean + drySeasonAdj);
             const dryThreshold = dryThresholdBase
-                + subtropicalDesert * 45
-                + interiorDesert * 180
-                + rainShadowDesert * 220
-                + coldCoastalDesert * 180;
+                + subtropicalDesert * CLIMATE_PARAMS.dryThresholdBonus.subtropical
+                + interiorDesert * CLIMATE_PARAMS.dryThresholdBonus.interior
+                + rainShadowDesert * CLIMATE_PARAMS.dryThresholdBonus.rainShadow
+                + coldCoastalDesert * CLIMATE_PARAMS.dryThresholdBonus.coldCoastal;
             const aridityRatio = precip / Math.max(1, dryThreshold);
             aridityRatioField[idx] = aridityRatio;
 
             const thermalZone = classifyTemperatureZone(tempMean, absLat);
-            zoneField[idx] = precip < dryThreshold && absLat < 72 ? CLIMATE_ZONE.ARID : thermalZone;
+            zoneField[idx] = precip < dryThreshold && absLat < CLIMATE_PARAMS.aridOverride.maxLat
+                ? CLIMATE_ZONE.ARID
+                : thermalZone;
         }
     }
 
