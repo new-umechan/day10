@@ -568,6 +568,55 @@ function createCountryBorderLayer(svg, width, height, climateLayerOptions) {
     svg.appendChild(group);
 }
 
+function createCountryLabelLayer(svg, width, height, climateLayerOptions) {
+    if (
+        !climateLayerOptions
+        || !climateLayerOptions.borderEnabled
+        || !climateLayerOptions.borderResult
+        || !climateLayerOptions.borderResult.countries
+        || climateLayerOptions.borderResult.countries.length === 0
+        || !climateLayerOptions.gw
+        || !climateLayerOptions.gh
+    ) {
+        return;
+    }
+
+    const countries = climateLayerOptions.borderResult.countries;
+    const gw = climateLayerOptions.gw;
+    const gh = climateLayerOptions.gh;
+    const baseFont = Math.max(7, Math.min(width, height) / 95);
+    const group = document.createElementNS(SVG_NS, "g");
+    group.setAttribute("data-layer", "country-labels-auto");
+
+    for (let i = 0; i < countries.length; i += 1) {
+        const c = countries[i];
+        if (!c || !c.capital || !c.name || c.area <= 0) {
+            continue;
+        }
+        const x = ((c.capital.x + 0.5) / gw) * width;
+        const y = ((c.capital.y + 0.5) / gh) * height;
+        const scale = Math.max(0.82, Math.min(1.28, Math.sqrt(c.area / 90)));
+        const lengthScale = Math.max(0.58, 1 - Math.max(0, c.name.length - 6) * 0.055);
+        const fontSize = (baseFont * scale * lengthScale).toFixed(2);
+
+        const label = document.createElementNS(SVG_NS, "text");
+        label.setAttribute("x", x.toFixed(2));
+        label.setAttribute("y", y.toFixed(2));
+        label.setAttribute("text-anchor", "middle");
+        label.setAttribute("dominant-baseline", "central");
+        label.setAttribute("font-size", fontSize);
+        label.setAttribute("font-family", "'Hiragino Sans', 'Yu Gothic', sans-serif");
+        label.setAttribute("fill", "rgba(33, 30, 26, 0.92)");
+        label.setAttribute("stroke", "rgba(255, 250, 240, 0.78)");
+        label.setAttribute("stroke-width", "1.6");
+        label.setAttribute("paint-order", "stroke");
+        label.textContent = c.name;
+        group.appendChild(label);
+    }
+
+    svg.appendChild(group);
+}
+
 export function buildCoastlineSvg(width, height, loops, contourSets, climateLayerOptions) {
     const svg = document.createElementNS(SVG_NS, "svg");
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
@@ -640,6 +689,7 @@ export function buildCoastlineSvg(width, height, loops, contourSets, climateLaye
         }
     }
 
+    createCountryLabelLayer(svg, width, height, climateLayerOptions);
     createClimateLegend(svg, width, climateLayerOptions);
 
     return svg;

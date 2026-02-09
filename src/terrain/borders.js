@@ -220,11 +220,14 @@ function chooseCapitals(gw, gh, landMask, scoreField, countryCount, random) {
 function stepCost(idxA, idxB, baseCost, elevationField, coastDistance) {
     const elevA = elevationField[idxA];
     const elevB = elevationField[idxB];
-    const slopePenalty = 1 + 2.6 * Math.abs(elevA - elevB);
-    const highPenalty = 1 + 1.2 * smoothstep(0.55, 0.9, Math.max(elevA, elevB));
+    const slopeDelta = Math.abs(elevA - elevB);
+    const slopePenalty = 1 + 2.9 * slopeDelta;
+    const ridgePenalty = 1 + 2.4 * smoothstep(0.08, 0.34, slopeDelta);
+    const highPenalty = 1 + 1.85 * smoothstep(0.5, 0.92, Math.max(elevA, elevB));
     const minCoast = Math.min(coastDistance[idxA], coastDistance[idxB]);
     const coastalPenalty = 1 + 0.35 * smoothstep(0.0, 0.08, 0.08 - minCoast);
-    return baseCost * slopePenalty * highPenalty * coastalPenalty;
+    const plainEase = 1 - 0.16 * smoothstep(0.0, 0.34, 0.34 - Math.max(elevA, elevB));
+    return baseCost * slopePenalty * ridgePenalty * highPenalty * coastalPenalty * Math.max(0.82, plainEase);
 }
 
 function assignCountries(gw, gh, landMask, elevationField, coastDistance, capitals, weights) {
@@ -444,25 +447,338 @@ function chaikinSmoothOpen(points, iterations) {
     return working;
 }
 
+function dominantNeighborId(counts) {
+    let bestId = -1;
+    let bestCount = -1;
+    for (const [id, count] of counts.entries()) {
+        if (count > bestCount || (count === bestCount && id < bestId)) {
+            bestId = id;
+            bestCount = count;
+        }
+    }
+    return bestId;
+}
+
+function collectComponentNeighborCounts(gw, gh, landMask, ownerField, cells, selfId) {
+    const counts = new Map();
+    const inComponent = new Uint8Array(ownerField.length);
+    for (let i = 0; i < cells.length; i += 1) {
+        inComponent[cells[i]] = 1;
+    }
+
+    for (let i = 0; i < cells.length; i += 1) {
+        const idx = cells[i];
+        const x = idx % gw;
+        const y = Math.floor(idx / gw);
+        for (let k = 0; k < 4; k += 1) {
+            const off = NEIGHBOR_OFFSETS[k];
+            const ny = y + off.y;
+            if (ny < 0 || ny >= gh) {
+                continue;
+            }
+            const nx = wrapX(x + off.x, gw);
+            const nIdx = indexOf(nx, ny, gw);
+            if (landMask[nIdx] !== 1 || inComponent[nIdx] === 1) {
+                continue;
+            }
+            const nid = ownerField[nIdx];
+            if (nid < 0 || nid === selfId) {
+                continue;
+            }
+            counts.set(nid, (counts.get(nid) || 0) + 1);
+        }
+    }
+
+    return counts;
+}
+
+function removeExclaves(gw, gh, landMask, ownerField, countryCount) {
+    const visited = new Uint8Array(ownerField.length);
+
+    for (let cid = 0; cid < countryCount; cid += 1) {
+        const components = [];
+        for (let i = 0; i < ownerField.length; i += 1) {
+            if (ownerField[i] !== cid || visited[i] === 1) {
+                continue;
+            }
+            const queue = [i];
+            visited[i] = 1;
+            const cells = [];
+
+            while (queue.length > 0) {
+                const idx = queue.pop();
+                cells.push(idx);
+                const x = idx % gw;
+                const y = Math.floor(idx / gw);
+                for (let k = 0; k < 4; k += 1) {
+                    const off = NEIGHBOR_OFFSETS[k];
+                    const ny = y + off.y;
+                    if (ny < 0 || ny >= gh) {
+                        continue;
+                    }
+                    const nx = wrapX(x + off.x, gw);
+                    const nIdx = indexOf(nx, ny, gw);
+                    if (ownerField[nIdx] !== cid || visited[nIdx] === 1) {
+                        continue;
+                    }
+                    visited[nIdx] = 1;
+                    queue.push(nIdx);
+                }
+            }
+
+            components.push(cells);
+        }
+
+        if (components.length <= 1) {
+            continue;
+        }
+
+        components.sort((a, b) => b.length - a.length);
+        for (let i = 1; i < components.length; i += 1) {
+            const cells = components[i];
+            const counts = collectComponentNeighborCounts(gw, gh, landMask, ownerField, cells, cid);
+            const recipient = dominantNeighborId(counts);
+            if (recipient < 0) {
+                continue;
+            }
+            for (let j = 0; j < cells.length; j += 1) {
+                ownerField[cells[j]] = recipient;
+            }
+        }
+    }
+}
+
+function absorbEnclosedSmallCountries(gw, gh, landMask, ownerField, countryCount, random) {
+    const area = new Int32Array(countryCount);
+    const touchesSea = new Uint8Array(countryCount);
+    let landCells = 0;
+
+    for (let y = 0; y < gh; y += 1) {
+        for (let x = 0; x < gw; x += 1) {
+            const idx = indexOf(x, y, gw);
+            const cid = ownerField[idx];
+            if (cid < 0) {
+                continue;
+            }
+            landCells += 1;
+            area[cid] += 1;
+            for (let k = 0; k < 4; k += 1) {
+                const off = NEIGHBOR_OFFSETS[k];
+                const ny = y + off.y;
+                if (ny < 0 || ny >= gh) {
+                    continue;
+                }
+                const nx = wrapX(x + off.x, gw);
+                const nIdx = indexOf(nx, ny, gw);
+                if (landMask[nIdx] === 0) {
+                    touchesSea[cid] = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    const avgArea = landCells / Math.max(1, countryCount);
+    const maxArea = Math.max(10, Math.floor(avgArea * 0.22));
+    for (let cid = 0; cid < countryCount; cid += 1) {
+        if (area[cid] === 0 || area[cid] > maxArea || touchesSea[cid] === 1) {
+            continue;
+        }
+
+        const counts = new Map();
+        const cells = [];
+        for (let i = 0; i < ownerField.length; i += 1) {
+            if (ownerField[i] !== cid) {
+                continue;
+            }
+            cells.push(i);
+            const x = i % gw;
+            const y = Math.floor(i / gw);
+            for (let k = 0; k < 4; k += 1) {
+                const off = NEIGHBOR_OFFSETS[k];
+                const ny = y + off.y;
+                if (ny < 0 || ny >= gh) {
+                    continue;
+                }
+                const nx = wrapX(x + off.x, gw);
+                const nIdx = indexOf(nx, ny, gw);
+                if (landMask[nIdx] !== 1) {
+                    continue;
+                }
+                const nid = ownerField[nIdx];
+                if (nid >= 0 && nid !== cid) {
+                    counts.set(nid, (counts.get(nid) || 0) + 1);
+                }
+            }
+        }
+
+        if (counts.size !== 1) {
+            continue;
+        }
+        const recipient = dominantNeighborId(counts);
+        if (recipient < 0) {
+            continue;
+        }
+        if (random() < 0.2) {
+            continue;
+        }
+        for (let i = 0; i < cells.length; i += 1) {
+            ownerField[cells[i]] = recipient;
+        }
+    }
+}
+
+function collectCountryAreas(ownerField, countryCount) {
+    const area = new Int32Array(countryCount);
+    for (let i = 0; i < ownerField.length; i += 1) {
+        const id = ownerField[i];
+        if (id >= 0) {
+            area[id] += 1;
+        }
+    }
+    return area;
+}
+
+function buildDonorBoundaryCells(gw, gh, ownerField, donorId) {
+    const cells = [];
+    for (let y = 0; y < gh; y += 1) {
+        for (let x = 0; x < gw; x += 1) {
+            const idx = indexOf(x, y, gw);
+            if (ownerField[idx] !== donorId) {
+                continue;
+            }
+            let boundary = false;
+            for (let k = 0; k < 4; k += 1) {
+                const off = NEIGHBOR_OFFSETS[k];
+                const ny = y + off.y;
+                if (ny < 0 || ny >= gh) {
+                    continue;
+                }
+                const nx = wrapX(x + off.x, gw);
+                const nIdx = indexOf(nx, ny, gw);
+                if (ownerField[nIdx] !== donorId) {
+                    boundary = true;
+                    break;
+                }
+            }
+            if (boundary) {
+                cells.push(idx);
+            }
+        }
+    }
+    return cells;
+}
+
+function carveCountryFromDonor(gw, gh, ownerField, donorId, newId, targetArea, random) {
+    const boundaryCells = buildDonorBoundaryCells(gw, gh, ownerField, donorId);
+    let seed = -1;
+    if (boundaryCells.length > 0) {
+        seed = boundaryCells[Math.floor(random() * boundaryCells.length)];
+    } else {
+        for (let i = 0; i < ownerField.length; i += 1) {
+            if (ownerField[i] === donorId) {
+                seed = i;
+                break;
+            }
+        }
+    }
+    if (seed < 0) {
+        return 0;
+    }
+
+    const queue = [seed];
+    const seen = new Uint8Array(ownerField.length);
+    seen[seed] = 1;
+    let assigned = 0;
+
+    while (queue.length > 0 && assigned < targetArea) {
+        const idx = queue.shift();
+        if (ownerField[idx] !== donorId) {
+            continue;
+        }
+        ownerField[idx] = newId;
+        assigned += 1;
+
+        const x = idx % gw;
+        const y = Math.floor(idx / gw);
+        for (let k = 0; k < 4; k += 1) {
+            const off = NEIGHBOR_OFFSETS[k];
+            const ny = y + off.y;
+            if (ny < 0 || ny >= gh) {
+                continue;
+            }
+            const nx = wrapX(x + off.x, gw);
+            const nIdx = indexOf(nx, ny, gw);
+            if (seen[nIdx] === 1 || ownerField[nIdx] !== donorId) {
+                continue;
+            }
+            seen[nIdx] = 1;
+            queue.push(nIdx);
+        }
+    }
+
+    return assigned;
+}
+
+function reviveMissingCountries(gw, gh, ownerField, countryCount, random) {
+    const area = collectCountryAreas(ownerField, countryCount);
+    const landCells = area.reduce((acc, v) => acc + v, 0);
+    const avgArea = landCells / Math.max(1, countryCount);
+    const targetArea = Math.max(6, Math.floor(avgArea * 0.18));
+
+    const missing = [];
+    for (let id = 0; id < countryCount; id += 1) {
+        if (area[id] === 0) {
+            missing.push(id);
+        }
+    }
+    if (missing.length === 0) {
+        return;
+    }
+
+    for (let i = 0; i < missing.length; i += 1) {
+        const newId = missing[i];
+        let donorId = -1;
+        let donorArea = -1;
+        for (let id = 0; id < countryCount; id += 1) {
+            if (area[id] > donorArea) {
+                donorArea = area[id];
+                donorId = id;
+            }
+        }
+        if (donorId < 0 || donorArea <= 1) {
+            break;
+        }
+
+        const assigned = carveCountryFromDonor(
+            gw,
+            gh,
+            ownerField,
+            donorId,
+            newId,
+            Math.min(targetArea, Math.max(1, donorArea - 1)),
+            random,
+        );
+        if (assigned > 0) {
+            area[newId] += assigned;
+            area[donorId] -= assigned;
+        }
+    }
+}
+
 function extractBorderPaths(gw, gh, landMask, ownerField, width, height) {
     const segments = [];
     const startMap = new Map();
-    const endMap = new Map();
 
     function addSegment(ax, ay, bx, by) {
         const id = segments.length;
         const seg = { ax, ay, bx, by };
         segments.push(seg);
         const sKey = vertexKey(ax, ay, gw);
-        const eKey = vertexKey(bx, by, gw);
         if (!startMap.has(sKey)) {
             startMap.set(sKey, []);
         }
-        if (!endMap.has(eKey)) {
-            endMap.set(eKey, []);
-        }
         startMap.get(sKey).push(id);
-        endMap.get(eKey).push(id);
     }
 
     for (let y = 0; y < gh; y += 1) {
@@ -544,11 +860,13 @@ function extractBorderPaths(gw, gh, landMask, ownerField, width, height) {
     return paths;
 }
 
-function summarizeCountries(countryCount, weights, areas, capitals) {
+function summarizeCountries(countryCount, weights, areas, capitals, random) {
+    const names = buildCountryNames(countryCount, areas, random);
     const countries = [];
     for (let id = 0; id < countryCount; id += 1) {
         countries.push({
             id,
+            name: names[id],
             weight: weights[id],
             area: areas[id],
             capital: {
@@ -558,6 +876,104 @@ function summarizeCountries(countryCount, weights, areas, capitals) {
         });
     }
     return countries;
+}
+
+function pickPolityWordByArea(area, avgArea, maxArea, id) {
+    const ratio = area / Math.max(1, avgArea);
+    const maxRatio = area / Math.max(1, maxArea);
+    const largeWords = [
+        "連邦共和国", "人民共和国", "帝国", "連邦", "大公国", "連合王国", "合衆国", "統合連邦",
+    ];
+    const mediumWords = [
+        "共和国", "王国", "連邦", "公国", "盟約国", "自治共和国", "共同体", "邦国",
+    ];
+    const smallWords = [
+        "公国", "自治領", "自治州", "領", "侯国", "自由市", "自治区", "保護領",
+    ];
+
+    if (maxRatio >= 0.62 || ratio >= 1.55) {
+        return largeWords[id % largeWords.length];
+    }
+    if (ratio <= 0.58) {
+        return smallWords[id % smallWords.length];
+    }
+    return mediumWords[id % mediumWords.length];
+}
+
+function pickSpecialHanCountryId(countryCount, areas, random) {
+    const ranked = [];
+    for (let id = 0; id < countryCount; id += 1) {
+        ranked.push({ id, area: areas[id] || 0 });
+    }
+    ranked.sort((a, b) => b.area - a.area);
+
+    const totalArea = areas.reduce((acc, v) => acc + v, 0);
+    const avgArea = totalArea / Math.max(1, countryCount);
+    const topCount = Math.max(1, Math.floor(countryCount * 0.2));
+    const candidates = ranked
+        .slice(0, topCount)
+        .filter((item) => item.area >= avgArea * 1.2);
+
+    const pool = candidates.length > 0 ? candidates : ranked.slice(0, topCount);
+    let sum = 0;
+    for (let i = 0; i < pool.length; i += 1) {
+        sum += Math.max(1, pool[i].area);
+    }
+    let r = random() * sum;
+    for (let i = 0; i < pool.length; i += 1) {
+        r -= Math.max(1, pool[i].area);
+        if (r <= 0) {
+            return pool[i].id;
+        }
+    }
+    return pool[0].id;
+}
+
+function buildCountryNames(countryCount, areas, random) {
+    const katakanaBases = [
+        "アストラ", "ベルカ", "コルド", "ドラニア", "エルダ", "ファルネ", "ガルム", "ヘリオ",
+        "イリス", "ジュノ", "カルナ", "ローディア", "モルダ", "ノルデ", "オルタ", "プラナ",
+        "クェリ", "リネア", "ソルナ", "トリス", "ウルナ", "ヴァレア", "ウェルド", "ザイナ",
+        "ヨルム", "ゼノア", "ミラド", "ラティア", "セリム", "ネオラ", "アルディア", "ベネス",
+        "クローヴァ", "デルミア", "エストラ", "フェルノ", "グラディア", "ハルモニ", "イグニス",
+        "ジェルバ", "カンティア", "ルメリア", "メリノア", "ナディア", "オルフェ", "プリムラ",
+        "クレシア", "ロザリア", "サルヴィア", "テラノ", "ウィスタ", "ヴェルナ", "キリエ",
+        "リュミナ", "セレナ", "トラヴィア", "ユグドラ", "ヴァニラ", "エリシア", "モンテア",
+        "ノクティア", "オーロラ", "ペリド", "クォーツ", "ルクシア", "シグマ", "タリス",
+        "ウィンガ", "ヴェスタ", "ゼフィラ", "アリエス", "カシア", "ドミナ", "エンフィ",
+        "フロリア", "ギルダ", "ホルン", "イセリア", "カレナ", "レヴィナ", "ミストラ",
+        "ネリス", "オクタ", "パルミア", "クインテ", "レグナ", "サフィア", "ティレア",
+        "ウルティア", "ヴァルダ", "ウェヌス", "ゼリオ", "アミュラ", "ブランカ", "シエラ",
+        "ディアナ", "エステル", "フィオラ", "グレイス", "ヘイゼル", "イヴリン",
+    ];
+    const hanOneCharBases = [
+        "華", "燕", "楚", "秦", "趙", "魏", "呉", "漢", "斉", "梁",
+        "越", "晋", "宋", "唐", "遼", "蒼", "凛", "曜", "嶺", "鳳",
+    ];
+    const names = [];
+    const used = new Set();
+    const totalArea = areas.reduce((acc, v) => acc + v, 0);
+    const avgArea = totalArea / Math.max(1, countryCount);
+    const maxArea = Math.max(...areas, 1);
+    const specialHanId = pickSpecialHanCountryId(countryCount, areas, random);
+
+    for (let i = 0; i < countryCount; i += 1) {
+        const useHan = i === specialHanId;
+        const base = useHan
+            ? hanOneCharBases[i % hanOneCharBases.length]
+            : katakanaBases[i % katakanaBases.length];
+        const polity = useHan ? "朝" : pickPolityWordByArea(areas[i], avgArea, maxArea, i);
+        let name = `${base}${polity}`;
+        let serial = 2;
+        while (used.has(name)) {
+            name = `${base}${polity}${serial}`;
+            serial += 1;
+        }
+        used.add(name);
+        names.push(name);
+    }
+
+    return names;
 }
 
 export function buildAutoBorders(
@@ -599,12 +1015,17 @@ export function buildAutoBorders(
         ownerField = assignCountries(gw, gh, landMask, elevationField, coastDistance, capitals, weights);
     }
 
+    removeExclaves(gw, gh, landMask, ownerField, countryCount);
+    absorbEnclosedSmallCountries(gw, gh, landMask, ownerField, countryCount, random);
+    removeExclaves(gw, gh, landMask, ownerField, countryCount);
+    reviveMissingCountries(gw, gh, ownerField, countryCount, random);
+
     const areas = measureCountries(ownerField, countryCount);
     const borderPaths = extractBorderPaths(gw, gh, landMask, ownerField, width, height);
 
     return {
         ownerField,
-        countries: summarizeCountries(countryCount, weights, areas, capitals),
+        countries: summarizeCountries(countryCount, weights, areas, capitals, random),
         borderPaths,
     };
 }
