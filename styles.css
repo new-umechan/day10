@@ -75,12 +75,36 @@ h1 {
 }
 
 .controls label.checkbox-label input {
-    width: auto;
+    width: 20px;
+    height: 20px;
     margin: 0;
     padding: 0;
-    border: none;
-    border-radius: 0;
-    background: transparent;
+    border: 1px solid #8c856f;
+    border-radius: 4px;
+    background: #fff;
+    appearance: none;
+    cursor: pointer;
+    display: inline-grid;
+    place-content: center;
+}
+
+.controls label.checkbox-label input::before {
+    content: "";
+    width: 11px;
+    height: 11px;
+    transform: scale(0);
+    transition: transform 120ms ease-out;
+    background: #2f6e90;
+    border-radius: 2px;
+}
+
+.controls label.checkbox-label input:checked::before {
+    transform: scale(1);
+}
+
+.controls label.checkbox-label input:focus-visible {
+    outline: 2px solid #5d90ac;
+    outline-offset: 2px;
 }
 
 .controls input,
