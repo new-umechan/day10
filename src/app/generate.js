@@ -12,6 +12,7 @@ import { combineMasks, resolveDiagonalConnections, bridgeCoastlines, extractBoun
 import { buildElevationField } from "../terrain/elevation.js";
 import { buildContourLoops } from "../terrain/contours.js";
 import { buildClimateField, CLIMATE_COLORS, CLIMATE_LABELS_JA } from "../terrain/climate.js";
+import { buildAutoBorders } from "../terrain/borders.js";
 import { buildCoastlineSvg } from "../render/svg.js";
 
 const FIXED_ROUGHNESS = 0.45;
@@ -26,11 +27,13 @@ function nextPaint() {
     });
 }
 
-function renderMapSnapshot(settings, processedLoops, contourSets, climateResult, finalMask, gw, gh) {
+function renderMapSnapshot(settings, processedLoops, contourSets, climateResult, borderResult, finalMask, gw, gh) {
     return buildCoastlineSvg(settings.width, settings.height, processedLoops, contourSets, {
-        climateEnabled: settings.climateEnabled,
+        climateEnabled: settings.climateEnabled && !settings.borderEnabled,
+        borderEnabled: settings.borderEnabled,
         windEnabled: settings.windEnabled,
         climateResult,
+        borderResult,
         landMask: finalMask,
         gw,
         gh,
@@ -72,6 +75,7 @@ export async function generateCoastlineSvgInSteps(settings, onStep) {
     let contourSets = [];
     let climateResult = null;
     let elevationResult = null;
+    let borderResult = null;
 
     for (let i = 0; i < rawLoops.length; i += 1) {
         const cleaned = removeCollinear(rawLoops[i]);
@@ -85,7 +89,7 @@ export async function generateCoastlineSvgInSteps(settings, onStep) {
         onStep,
         20,
         "海岸線の下描きを表示中...",
-        renderMapSnapshot(settings, previewLoops, contourSets, climateResult, finalMask, gw, gh),
+        renderMapSnapshot(settings, previewLoops, contourSets, climateResult, borderResult, finalMask, gw, gh),
     );
     await nextPaint();
 
@@ -100,7 +104,7 @@ export async function generateCoastlineSvgInSteps(settings, onStep) {
                 onStep,
                 coastProgress,
                 "海岸線を詳細化中...",
-                renderMapSnapshot(settings, processedLoops, contourSets, climateResult, finalMask, gw, gh),
+                renderMapSnapshot(settings, processedLoops, contourSets, climateResult, borderResult, finalMask, gw, gh),
             );
             await nextPaint();
         }
@@ -109,38 +113,38 @@ export async function generateCoastlineSvgInSteps(settings, onStep) {
         onStep,
         32,
         "海岸線を描画中...",
-        renderMapSnapshot(settings, processedLoops, contourSets, climateResult, finalMask, gw, gh),
+        renderMapSnapshot(settings, processedLoops, contourSets, climateResult, borderResult, finalMask, gw, gh),
     );
     await nextPaint();
 
     reportStep(onStep, 40, "標高場を計算中...");
     await nextPaint();
-    if (settings.contourEnabled || settings.climateEnabled || settings.windEnabled) {
-        elevationResult = buildElevationField(random, gw, gh, finalMask);
-    }
+    elevationResult = buildElevationField(random, gw, gh, finalMask);
     reportStep(
         onStep,
         56,
         "標高場を計算中...",
-        renderMapSnapshot(settings, processedLoops, contourSets, climateResult, finalMask, gw, gh),
+        renderMapSnapshot(settings, processedLoops, contourSets, climateResult, borderResult, finalMask, gw, gh),
     );
     await nextPaint();
 
     if (settings.climateEnabled || settings.windEnabled) {
         reportStep(onStep, 62, "気候と風を計算中...");
         await nextPaint();
+        const climateRandom = createMulberry32(hashString(`${settings.seedText}::climate`));
         climateResult = buildClimateField(
             gw,
             gh,
             finalMask,
             elevationResult.elevationField,
             elevationResult.coastDistance,
+            climateRandom,
         );
         reportStep(
             onStep,
             74,
             "気候と風を描画中...",
-            renderMapSnapshot(settings, processedLoops, contourSets, climateResult, finalMask, gw, gh),
+            renderMapSnapshot(settings, processedLoops, contourSets, climateResult, borderResult, finalMask, gw, gh),
         );
         await nextPaint();
     }
@@ -163,7 +167,33 @@ export async function generateCoastlineSvgInSteps(settings, onStep) {
             onStep,
             92,
             "等高線を描画中...",
-            renderMapSnapshot(settings, processedLoops, contourSets, climateResult, finalMask, gw, gh),
+            renderMapSnapshot(settings, processedLoops, contourSets, climateResult, borderResult, finalMask, gw, gh),
+        );
+        await nextPaint();
+    }
+
+    if (settings.borderEnabled) {
+        reportStep(onStep, 94, "国境を計算中...");
+        await nextPaint();
+        const borderRandom = createMulberry32(hashString(`${settings.seedText}::borders`));
+        borderResult = buildAutoBorders(
+            gw,
+            gh,
+            finalMask,
+            elevationResult.elevationField,
+            elevationResult.coastDistance,
+            borderRandom,
+            {
+                countryCount: 90,
+                width: settings.width,
+                height: settings.height,
+            },
+        );
+        reportStep(
+            onStep,
+            98,
+            "国境を描画中...",
+            renderMapSnapshot(settings, processedLoops, contourSets, climateResult, borderResult, finalMask, gw, gh),
         );
         await nextPaint();
     }
@@ -173,6 +203,7 @@ export async function generateCoastlineSvgInSteps(settings, onStep) {
         processedLoops,
         contourSets,
         climateResult,
+        borderResult,
         finalMask,
         gw,
         gh,
@@ -204,6 +235,7 @@ export function generateCoastlineSvg(settings) {
     let contourSets = [];
     let climateResult = null;
     let elevationResult = null;
+    let borderResult = null;
 
     for (let i = 0; i < rawLoops.length; i += 1) {
         const cleaned = removeCollinear(rawLoops[i]);
@@ -215,17 +247,17 @@ export function generateCoastlineSvg(settings) {
         processedLoops.push(detailed);
     }
 
-    if (settings.contourEnabled || settings.climateEnabled || settings.windEnabled) {
-        elevationResult = buildElevationField(random, gw, gh, finalMask);
-    }
+    elevationResult = buildElevationField(random, gw, gh, finalMask);
 
     if (settings.climateEnabled || settings.windEnabled) {
+        const climateRandom = createMulberry32(hashString(`${settings.seedText}::climate`));
         climateResult = buildClimateField(
             gw,
             gh,
             finalMask,
             elevationResult.elevationField,
             elevationResult.coastDistance,
+            climateRandom,
         );
     }
 
@@ -243,5 +275,22 @@ export function generateCoastlineSvg(settings) {
         );
     }
 
-    return renderMapSnapshot(settings, processedLoops, contourSets, climateResult, finalMask, gw, gh);
+    if (settings.borderEnabled) {
+        const borderRandom = createMulberry32(hashString(`${settings.seedText}::borders`));
+        borderResult = buildAutoBorders(
+            gw,
+            gh,
+            finalMask,
+            elevationResult.elevationField,
+            elevationResult.coastDistance,
+            borderRandom,
+            {
+                countryCount: 90,
+                width: settings.width,
+                height: settings.height,
+            },
+        );
+    }
+
+    return renderMapSnapshot(settings, processedLoops, contourSets, climateResult, borderResult, finalMask, gw, gh);
 }

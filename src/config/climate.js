@@ -1,7 +1,7 @@
 export const CLIMATE_PARAMS = {
     precipitation: {
         equatorialWet: { center: 6, sigma: 14, amp: 1500 },
-        subtropicalDry: { center: 27, sigma: 9.5, amp: 640 },
+        subtropicalDry: { center: 27, sigma: 10.5, amp: 900 },
         midLatitudeWet: { center: 50, sigma: 13, amp: 520 },
         polarDry: { startLat: 55, span: 30, amp: 480 },
         base: 760,
@@ -89,18 +89,26 @@ export const CLIMATE_PARAMS = {
         precipMax: 3500,
     },
     desertPenalty: {
-        subtropical: 180,
+        subtropical: 280,
         interior: 690,
         rainShadow: 2000,
         coldCoastal: 580,
     },
     dryThresholdBonus: {
-        subtropical: 45,
+        subtropical: 110,
         interior: 210,
         rainShadow: 260,
         coldCoastal: 210,
     },
     aridOverride: {
         maxLat: 72,
+    },
+    randomness: {
+        enabled: true,
+        tempJitterC: 0.45,
+        precipJitterRatio: 0.08,
+        dryThresholdJitterRatio: 0.05,
+        noiseFreqX: 3.2,
+        noiseFreqY: 2.3,
     },
 };

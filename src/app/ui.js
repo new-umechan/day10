@@ -8,6 +8,7 @@ export function initUI() {
         heightInput: document.getElementById("heightInput"),
         contourToggleInput: document.getElementById("contourToggleInput"),
         climateToggleInput: document.getElementById("climateToggleInput"),
+        borderToggleInput: document.getElementById("borderToggleInput"),
         windToggleInput: document.getElementById("windToggleInput"),
         contourCountInput: document.getElementById("contourCountInput"),
         generateBtn: document.getElementById("generateBtn"),
@@ -29,6 +30,9 @@ export function initUI() {
         }
         if (elements.climateToggleInput) {
             elements.climateToggleInput.disabled = isLoading;
+        }
+        if (elements.borderToggleInput) {
+            elements.borderToggleInput.disabled = isLoading;
         }
         if (elements.windToggleInput) {
             elements.windToggleInput.disabled = isLoading;
@@ -111,6 +115,27 @@ export function initUI() {
     }
     if (elements.climateToggleInput) {
         elements.climateToggleInput.addEventListener("change", () => {
+            if (
+                elements.climateToggleInput
+                && elements.borderToggleInput
+                && elements.climateToggleInput.checked
+                && elements.borderToggleInput.checked
+            ) {
+                elements.borderToggleInput.checked = false;
+            }
+            setLoadingState(false);
+        });
+    }
+    if (elements.borderToggleInput) {
+        elements.borderToggleInput.addEventListener("change", () => {
+            if (
+                elements.climateToggleInput
+                && elements.borderToggleInput
+                && elements.borderToggleInput.checked
+                && elements.climateToggleInput.checked
+            ) {
+                elements.climateToggleInput.checked = false;
+            }
             setLoadingState(false);
         });
     }

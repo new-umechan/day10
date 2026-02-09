@@ -47,17 +47,18 @@ function roughenLoop(points, random, amplitude, iterations) {
 }
 
 export function buildContinentShapes(random, gw, gh) {
+    const p = COASTLINE_PARAMS.continents;
     const shapes = [];
-    const continentCount = 3 + Math.floor(random() * 3);
+    const continentCount = p.minCount + Math.floor(random() * p.countRange);
     const sizeFactors = [];
 
     for (let i = 0; i < continentCount; i += 1) {
         if (i === 0) {
-            sizeFactors.push(1.5 + random() * 0.5);
+            sizeFactors.push(p.majorMin + random() * p.majorRange);
         } else if (i === 1) {
-            sizeFactors.push(1.1 + random() * 0.35);
+            sizeFactors.push(p.mediumMin + random() * p.mediumRange);
         } else {
-            sizeFactors.push(0.65 + random() * 0.7);
+            sizeFactors.push(p.minorMin + random() * p.minorRange);
         }
     }
 
@@ -70,12 +71,18 @@ export function buildContinentShapes(random, gw, gh) {
 
     for (let i = 0; i < continentCount; i += 1) {
         const factor = sizeFactors[i];
-        const cx = ((i + 1) / (continentCount + 1)) * gw + (random() * 2 - 1) * gw * 0.08;
-        const cy = gh * (0.28 + random() * 0.44);
-        const baseRx = gw * (0.06 + random() * 0.06) * factor;
-        const baseRy = gh * (0.12 + random() * 0.12) * factor;
-        const base = createInitialLoop(random, cx, cy, baseRx, baseRy, 12 + Math.floor(random() * 6));
-        const fractal = roughenLoop(base, random, Math.min(baseRx, baseRy) * 0.76, 4);
+        const cx = ((i + 1) / (continentCount + 1)) * gw + (random() * 2 - 1) * gw * p.centerJitterX;
+        const cy = gh * (p.centerYMin + random() * p.centerYRange);
+        const baseRx = gw * (p.baseRxMin + random() * p.baseRxRange) * factor;
+        const baseRy = gh * (p.baseRyMin + random() * p.baseRyRange) * factor;
+        const pointCount = p.basePointMin + Math.floor(random() * p.basePointRange);
+        const base = createInitialLoop(random, cx, cy, baseRx, baseRy, pointCount);
+        const fractal = roughenLoop(
+            base,
+            random,
+            Math.min(baseRx, baseRy) * p.roughenAmpScale,
+            p.roughenIterations,
+        );
         shapes.push({ cx, cy, points: fractal });
     }
 

@@ -38,6 +38,14 @@ function gaussian(x, center, sigma) {
     return Math.exp(-(d * d) / (2 * sigma * sigma));
 }
 
+function smoothNoiseSigned(x, y, gw, gh, phaseA, phaseB, freqX, freqY) {
+    const nx = x / Math.max(1, gw);
+    const ny = y / Math.max(1, gh);
+    const a = Math.sin((nx * freqX + ny * freqY + phaseA) * Math.PI * 2);
+    const b = Math.cos((nx * (freqY * 0.85) - ny * (freqX * 0.9) + phaseB) * Math.PI * 2);
+    return clamp((a * 0.6 + b * 0.4), -1, 1);
+}
+
 function basePrecipitationMm(absLat) {
     const p = CLIMATE_PARAMS.precipitation;
     const equatorialWet = gaussian(absLat, p.equatorialWet.center, p.equatorialWet.sigma);
@@ -238,7 +246,7 @@ function classifyTemperatureZone(tempMean, absLat) {
     return CLIMATE_ZONE.TROPICAL;
 }
 
-export function buildClimateField(gw, gh, landMask, elevationField, coastDistance) {
+export function buildClimateField(gw, gh, landMask, elevationField, coastDistance, climateRandom = null) {
     const size = gw * gh;
     const zoneField = new Uint8Array(size);
     const latitudeDegField = new Float32Array(size);
@@ -247,6 +255,9 @@ export function buildClimateField(gw, gh, landMask, elevationField, coastDistanc
     const aridityRatioField = new Float32Array(size);
     const windUxField = new Float32Array(size);
     const windUyField = new Float32Array(size);
+    const rand = CLIMATE_PARAMS.randomness;
+    const phaseA = climateRandom ? climateRandom() : 0.173;
+    const phaseB = climateRandom ? climateRandom() : 0.619;
 
     for (let y = 0; y < gh; y += 1) {
         const latDeg = toLatitudeDeg(y, gh);
@@ -284,7 +295,28 @@ export function buildClimateField(gw, gh, landMask, elevationField, coastDistanc
 
             const elevationM = elevationField[idx] * thermal.elevationScaleM;
             const islandWarmBias = Math.pow(1 - normalizedCoastDist, thermal.islandWarmPow) * thermal.islandWarmAmp;
-            const tempMean = tempSeaLevel - thermal.lapseRatePerKm * (elevationM / 1000) + islandWarmBias;
+            const jitterA = smoothNoiseSigned(
+                x,
+                y,
+                gw,
+                gh,
+                phaseA,
+                phaseB,
+                rand.noiseFreqX,
+                rand.noiseFreqY,
+            );
+            const jitterB = smoothNoiseSigned(
+                x,
+                y,
+                gw,
+                gh,
+                phaseB + 0.31,
+                phaseA + 0.57,
+                rand.noiseFreqX * 1.35,
+                rand.noiseFreqY * 1.2,
+            );
+            const tempJitter = rand.enabled ? jitterA * rand.tempJitterC : 0;
+            const tempMean = tempSeaLevel - thermal.lapseRatePerKm * (elevationM / 1000) + islandWarmBias + tempJitter;
             tempMeanCField[idx] = tempMean;
 
             const coastMoisture = Math.pow(1 - normalizedCoastDist, moisture.coastMoisturePow) * moisture.coastMoistureAmp;
@@ -328,18 +360,22 @@ export function buildClimateField(gw, gh, landMask, elevationField, coastDistanc
                 + rainShadowDesert * CLIMATE_PARAMS.desertPenalty.rainShadow
                 + coldCoastalDesert * CLIMATE_PARAMS.desertPenalty.coldCoastal;
             const precip = clamp(
-                basePrecip
+                (
+                    basePrecip
                     + coastMoisture
                     + islandHumidityBoost
                     + monsoonBoost
                     - totalShadowPenalty
-                    - desertPenalty,
+                    - desertPenalty
+                ) * (rand.enabled ? (1 + jitterB * rand.precipJitterRatio) : 1),
                 moisture.precipMin,
                 moisture.precipMax,
             );
             precipMmField[idx] = precip;
 
-            const dryThresholdBase = Math.max(0, 20 * tempMean + drySeasonAdj);
+            const dryThresholdBaseRaw = Math.max(0, 20 * tempMean + drySeasonAdj);
+            const dryThresholdBase = dryThresholdBaseRaw
+                * (rand.enabled ? (1 + jitterA * rand.dryThresholdJitterRatio) : 1);
             const dryThreshold = dryThresholdBase
                 + subtropicalDesert * CLIMATE_PARAMS.dryThresholdBonus.subtropical
                 + interiorDesert * CLIMATE_PARAMS.dryThresholdBonus.interior

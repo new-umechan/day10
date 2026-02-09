@@ -8,6 +8,7 @@ export function readSettings(elements) {
 
     const contourEnabled = elements.contourToggleInput ? elements.contourToggleInput.checked : true;
     const climateEnabled = elements.climateToggleInput ? elements.climateToggleInput.checked : true;
+    const borderEnabled = elements.borderToggleInput ? elements.borderToggleInput.checked : false;
     const windEnabled = elements.windToggleInput ? elements.windToggleInput.checked : false;
     const contourCount = clamp(
         Number(elements.contourCountInput ? elements.contourCountInput.value : 6) || 6,
@@ -24,6 +25,7 @@ export function readSettings(elements) {
         height,
         contourEnabled,
         climateEnabled,
+        borderEnabled,
         windEnabled,
         contourCount,
     };

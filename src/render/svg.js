@@ -60,6 +60,7 @@ function createClimateLayer(svg, width, height, climateLayerOptions) {
     if (
         !climateLayerOptions
         || !climateLayerOptions.climateEnabled
+        || climateLayerOptions.borderEnabled
         || !climateLayerOptions.climateResult
         || !climateLayerOptions.climateResult.zoneField
     ) {
@@ -87,6 +88,75 @@ function createClimateLayer(svg, width, height, climateLayerOptions) {
         path.setAttribute("data-layer", `climate-zone-${zone}`);
         svg.appendChild(path);
     }
+}
+
+function countryColor(id) {
+    const hue = (id * 137.508) % 360;
+    const sat = 38 + (id % 5) * 5;
+    const light = 58 + (id % 3) * 4;
+    return `hsl(${hue.toFixed(1)} ${sat}% ${light}%)`;
+}
+
+function buildCountryPathData(countryId, climateLayerOptions, width, height) {
+    const rawMask = climateLayerOptions.landMask;
+    const ownerField = climateLayerOptions.borderResult.ownerField;
+    const countryMask = new Uint8Array(rawMask.length);
+
+    for (let i = 0; i < rawMask.length; i += 1) {
+        countryMask[i] = rawMask[i] === 1 && ownerField[i] === countryId ? 1 : 0;
+    }
+
+    const rawLoops = extractBoundaryLoops(countryMask, climateLayerOptions.gw, climateLayerOptions.gh);
+    const worldLoops = [];
+    const minArea = width * height * 0.00001;
+
+    for (let i = 0; i < rawLoops.length; i += 1) {
+        const cleaned = removeCollinear(rawLoops[i]);
+        const world = gridToWorld(
+            cleaned,
+            width,
+            height,
+            climateLayerOptions.gw,
+            climateLayerOptions.gh,
+        );
+        if (polygonArea(world) >= minArea) {
+            worldLoops.push(world);
+        }
+    }
+
+    return worldLoops.length > 0 ? worldLoops.map((loop) => loopToPathSegment(loop)).join(" ") : "";
+}
+
+function createCountryFillLayer(svg, width, height, climateLayerOptions) {
+    if (
+        !climateLayerOptions
+        || !climateLayerOptions.borderEnabled
+        || !climateLayerOptions.borderResult
+        || !climateLayerOptions.borderResult.ownerField
+        || !climateLayerOptions.borderResult.countries
+    ) {
+        return;
+    }
+
+    const countries = climateLayerOptions.borderResult.countries;
+    const group = document.createElementNS(SVG_NS, "g");
+    group.setAttribute("data-layer", "country-fills-auto");
+
+    for (let i = 0; i < countries.length; i += 1) {
+        const country = countries[i];
+        const d = buildCountryPathData(country.id, climateLayerOptions, width, height);
+        if (!d) {
+            continue;
+        }
+        const path = document.createElementNS(SVG_NS, "path");
+        path.setAttribute("d", d);
+        path.setAttribute("fill", countryColor(country.id));
+        path.setAttribute("fill-rule", "evenodd");
+        path.setAttribute("stroke", "none");
+        group.appendChild(path);
+    }
+
+    svg.appendChild(group);
 }
 
 function createWindLayer(svg, width, height, climateLayerOptions) {
@@ -167,6 +237,7 @@ function createClimateLegend(svg, width, climateLayerOptions) {
     if (
         !climateLayerOptions
         || !climateLayerOptions.climateEnabled
+        || climateLayerOptions.borderEnabled
         || !climateLayerOptions.climateResult
     ) {
         return;
@@ -227,6 +298,51 @@ function createClimateLegend(svg, width, climateLayerOptions) {
     svg.appendChild(group);
 }
 
+function lineToPath(points) {
+    if (!points || points.length < 2) {
+        return "";
+    }
+    let d = `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
+    for (let i = 1; i < points.length; i += 1) {
+        d += ` L ${points[i].x.toFixed(2)} ${points[i].y.toFixed(2)}`;
+    }
+    return d;
+}
+
+function createCountryBorderLayer(svg, width, height, climateLayerOptions) {
+    if (
+        !climateLayerOptions
+        || !climateLayerOptions.borderEnabled
+        || !climateLayerOptions.borderResult
+        || !climateLayerOptions.borderResult.borderPaths
+        || climateLayerOptions.borderResult.borderPaths.length === 0
+    ) {
+        return;
+    }
+
+    const strokeWidth = Math.max(1.0, Math.min(width, height) / 900);
+    const group = document.createElementNS(SVG_NS, "g");
+    group.setAttribute("data-layer", "country-borders-auto");
+
+    for (let i = 0; i < climateLayerOptions.borderResult.borderPaths.length; i += 1) {
+        const points = climateLayerOptions.borderResult.borderPaths[i];
+        const d = lineToPath(points);
+        if (!d) {
+            continue;
+        }
+        const path = document.createElementNS(SVG_NS, "path");
+        path.setAttribute("d", d);
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke", "rgba(122, 28, 28, 0.88)");
+        path.setAttribute("stroke-width", strokeWidth.toFixed(2));
+        path.setAttribute("stroke-linejoin", "round");
+        path.setAttribute("stroke-linecap", "round");
+        group.appendChild(path);
+    }
+
+    svg.appendChild(group);
+}
+
 export function buildCoastlineSvg(width, height, loops, contourSets, climateLayerOptions) {
     const svg = document.createElementNS(SVG_NS, "svg");
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
@@ -241,6 +357,7 @@ export function buildCoastlineSvg(width, height, loops, contourSets, climateLaye
     svg.appendChild(sea);
 
     createClimateLayer(svg, width, height, climateLayerOptions);
+    createCountryFillLayer(svg, width, height, climateLayerOptions);
     createWindLayer(svg, width, height, climateLayerOptions);
 
     for (const guide of createLatitudeGuides(width, height)) {
@@ -256,12 +373,13 @@ export function buildCoastlineSvg(width, height, loops, contourSets, climateLaye
 
     const strokeWidth = Math.max(0.9, Math.min(width, height) / 760);
     const climateVisible = Boolean(climateLayerOptions && climateLayerOptions.climateEnabled);
+    const borderVisible = Boolean(climateLayerOptions && climateLayerOptions.borderEnabled);
 
     if (loops.length > 0) {
         const coast = document.createElementNS(SVG_NS, "path");
         const d = loops.map((loop) => loopToPathSegment(loop)).join(" ");
         coast.setAttribute("d", d);
-        coast.setAttribute("fill", climateVisible ? "none" : "#dfd3a8");
+        coast.setAttribute("fill", climateVisible || borderVisible ? "none" : "#dfd3a8");
         coast.setAttribute("fill-rule", "evenodd");
         coast.setAttribute("stroke", "#6d6548");
         coast.setAttribute("stroke-width", String(strokeWidth));
