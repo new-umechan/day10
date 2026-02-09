@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Day010 - 海岸線生成</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+    <main class="container">
+        <h1>仮想地図生成（海岸線）</h1>
+        <section class="controls" aria-label="海岸線パラメータ">
+            <label>
+                Seed
+                <input id="seedInput" type="text" value="day010" />
+            </label>
+            <label>
+                幅(px)
+                <input id="widthInput" type="number" min="512" max="2400" step="32" value="1280" />
+            </label>
+            <label>
+                高さ(px)
+                <input id="heightInput" type="number" min="256" max="1400" step="32" value="640" />
+            </label>
+            <button id="generateBtn" type="button">生成</button>
+            <button id="downloadBtn" type="button">SVG保存</button>
+            <p id="loadingIndicator" class="loading-indicator" role="status" aria-live="polite" hidden>
+                生成中...
+            </p>
+        </section>
+
+        <section class="preview" aria-label="SVGプレビュー">
+            <div id="svgHost"></div>
+        </section>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>

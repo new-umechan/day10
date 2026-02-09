@@ -1,0 +1,91 @@
+:root {
+    --bg: #f2eee3;
+    --panel: #fffdf6;
+    --text: #2b2a28;
+    --line: #d6d0be;
+    --sea: #9bc7df;
+    --land: #e0d4a7;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
+    color: var(--text);
+    background: linear-gradient(180deg, #f7f4eb 0%, #ece5d5 100%);
+}
+
+.container {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 24px;
+}
+
+h1 {
+    margin: 0;
+    font-size: 1.75rem;
+}
+
+.description {
+    margin-top: 8px;
+}
+
+.controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    align-items: end;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--panel);
+}
+
+.loading-indicator {
+    margin: 0;
+    font-size: 0.9rem;
+    color: #5a543f;
+}
+
+.controls label {
+    display: grid;
+    gap: 6px;
+    font-size: 0.9rem;
+}
+
+.controls input,
+.controls button {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid #b9b29d;
+    font-size: 0.95rem;
+    background: #fff;
+}
+
+.controls button {
+    cursor: pointer;
+}
+
+.controls button:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+}
+
+.preview {
+    margin-top: 16px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 10px;
+    background: var(--panel);
+}
+
+#svgHost svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    border-radius: 8px;
+}
