@@ -305,6 +305,7 @@ function createClimateLayer(svg, width, height, climateLayerOptions) {
         const path = document.createElementNS(SVG_NS, "path");
         path.setAttribute("d", d);
         path.setAttribute("fill", climateLayerOptions.colors[zone]);
+        path.setAttribute("fill-rule", "evenodd");
         path.setAttribute("stroke", "none");
         path.setAttribute("data-layer", `climate-zone-${zone}`);
         svg.appendChild(path);
