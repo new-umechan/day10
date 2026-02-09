@@ -56,6 +56,22 @@ h1 {
     font-size: 0.9rem;
 }
 
+.controls label.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+}
+
+.controls label.checkbox-label input {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+}
+
 .controls input,
 .controls button {
     width: 100%;

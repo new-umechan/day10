@@ -22,6 +22,14 @@
                 高さ(px)
                 <input id="heightInput" type="number" min="256" max="1400" step="32" value="640" />
             </label>
+            <label class="checkbox-label">
+                <input id="contourToggleInput" type="checkbox" checked />
+                等高線を表示
+            </label>
+            <label>
+                等高線数
+                <input id="contourCountInput" type="number" min="2" max="12" step="1" value="6" />
+            </label>
             <button id="generateBtn" type="button">生成</button>
             <button id="downloadBtn" type="button">SVG保存</button>
             <p id="loadingIndicator" class="loading-indicator" role="status" aria-live="polite" hidden>
@@ -34,6 +42,6 @@
         </section>
     </main>
 
-    <script src="script.js"></script>
+    <script type="module" src="src/main.js"></script>
 </body>
 </html>
