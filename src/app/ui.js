@@ -64,7 +64,9 @@ export function initUI() {
 
         const a = document.createElement("a");
         a.href = url;
-        a.download = `coastline-${Date.now()}.svg`;
+        const seedText = (elements.seedInput ? elements.seedInput.value.trim() : "") || "day010";
+        const safeSeed = seedText.replace(/[\\/:*?"<>|]/g, "_");
+        a.download = `map_${safeSeed}.svg`;
         document.body.appendChild(a);
         a.click();
         a.remove();

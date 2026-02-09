@@ -20,6 +20,18 @@ function randomLandCell(random, gw, gh, landMask, attempts) {
     return { x: Math.floor(gw * 0.5), y: Math.floor(gh * 0.5) };
 }
 
+function randomInlandCell(random, gw, gh, landMask, coastDistance, minCoastDistance, attempts) {
+    for (let i = 0; i < attempts; i += 1) {
+        const x = Math.floor(random() * gw);
+        const y = Math.floor(random() * gh);
+        const idx = indexOf(x, y, gw);
+        if (landMask[idx] === 1 && coastDistance[idx] >= minCoastDistance) {
+            return { x, y };
+        }
+    }
+    return randomLandCell(random, gw, gh, landMask, 100);
+}
+
 function computeCoastDistanceField(landMask, gw, gh) {
     const cellCount = gw * gh;
     const distance = new Float32Array(cellCount);
@@ -79,187 +91,306 @@ function computeCoastDistanceField(landMask, gw, gh) {
 
     const invMax = maxLandDistance > 0 ? 1 / maxLandDistance : 0;
     for (let i = 0; i < cellCount; i += 1) {
-        if (landMask[i] === 0) {
-            continue;
+        if (landMask[i] === 1) {
+            distance[i] *= invMax;
         }
-        distance[i] *= invMax;
     }
 
     return distance;
 }
 
-function randomInlandCell(random, gw, gh, landMask, coastDistance, minCoastDistance, attempts) {
-    for (let i = 0; i < attempts; i += 1) {
-        const x = Math.floor(random() * gw);
-        const y = Math.floor(random() * gh);
-        const idx = indexOf(x, y, gw);
-        if (landMask[idx] === 1 && coastDistance[idx] >= minCoastDistance) {
-            return { x, y };
-        }
-    }
-    return randomLandCell(random, gw, gh, landMask, 100);
-}
+function labelLandComponents(landMask, gw, gh) {
+    const labels = new Int32Array(gw * gh);
+    labels.fill(-1);
+    const components = [];
+    const qx = new Int32Array(gw * gh);
+    const qy = new Int32Array(gw * gh);
+    let labelId = 0;
 
-function randomCoastalBandCell(random, gw, gh, landMask, coastDistance, minBand, maxBand, attempts) {
-    for (let i = 0; i < attempts; i += 1) {
-        const x = Math.floor(random() * gw);
-        const y = Math.floor(random() * gh);
-        const idx = indexOf(x, y, gw);
-        const d = coastDistance[idx];
-        if (landMask[idx] === 1 && d >= minBand && d <= maxBand) {
-            return { x, y };
-        }
-    }
-    return randomInlandCell(random, gw, gh, landMask, coastDistance, 0.08, 120);
-}
+    for (let y = 0; y < gh; y += 1) {
+        for (let x = 0; x < gw; x += 1) {
+            const startIdx = indexOf(x, y, gw);
+            if (landMask[startIdx] === 0 || labels[startIdx] !== -1) {
+                continue;
+            }
 
-function buildBoundaryPath(random, gw, gh, startX, startY, heading, steps, stepLen, turnScale) {
-    const points = [{ x: startX, y: startY }];
-    let x = startX;
-    let y = startY;
-    let dir = heading;
+            let head = 0;
+            let tail = 0;
+            qx[tail] = x;
+            qy[tail] = y;
+            tail += 1;
+            labels[startIdx] = labelId;
 
-    for (let i = 0; i < steps; i += 1) {
-        dir += (random() * 2 - 1) * turnScale;
-        const localStep = stepLen * (0.78 + random() * 0.46);
-        x = wrapX(x + Math.cos(dir) * localStep, gw);
-        y = clamp(y + Math.sin(dir) * localStep, 1, gh - 2);
-        points.push({ x, y });
-    }
+            const cells = [];
+            while (head < tail) {
+                const cx = qx[head];
+                const cy = qy[head];
+                head += 1;
+                cells.push({ x: cx, y: cy });
 
-    return points;
-}
+                for (let oy = -1; oy <= 1; oy += 1) {
+                    for (let ox = -1; ox <= 1; ox += 1) {
+                        if (ox === 0 && oy === 0) {
+                            continue;
+                        }
+                        const ny = cy + oy;
+                        if (ny < 0 || ny >= gh) {
+                            continue;
+                        }
+                        const nx = wrapX(cx + ox, gw);
+                        const idx = indexOf(nx, ny, gw);
+                        if (landMask[idx] === 0 || labels[idx] !== -1) {
+                            continue;
+                        }
+                        labels[idx] = labelId;
+                        qx[tail] = nx;
+                        qy[tail] = ny;
+                        tail += 1;
+                    }
+                }
+            }
 
-function buildTectonicBoundaries(random, gw, gh, landMask, coastDistance) {
-    const boundaries = [];
-    const convergentBoundaryCount = 2 + Math.floor(random() * 3);
-    const coastalConvergentChance = 0.74;
-    const forceCoastal = random() < coastalConvergentChance;
-    let coastalPlaced = false;
-
-    for (let i = 0; i < convergentBoundaryCount; i += 1) {
-        const shouldCoastal = forceCoastal && (!coastalPlaced || (i > 0 && random() < 0.4));
-        const start = shouldCoastal
-            ? randomCoastalBandCell(random, gw, gh, landMask, coastDistance, 0.03, 0.22, 160)
-            : randomInlandCell(random, gw, gh, landMask, coastDistance, 0.14, 160);
-
-        const heading = random() * Math.PI * 2;
-        const points = buildBoundaryPath(
-            random,
-            gw,
-            gh,
-            start.x,
-            start.y,
-            heading,
-            4 + Math.floor(random() * 4),
-            gw * (0.07 + random() * 0.05),
-            0.35,
-        );
-
-        boundaries.push({
-            type: "convergent",
-            coastal: shouldCoastal,
-            points,
-            width: gw * (0.035 + random() * 0.055),
-            strength: shouldCoastal ? 0.72 + random() * 0.42 : 0.88 + random() * 0.56,
-        });
-
-        if (shouldCoastal) {
-            coastalPlaced = true;
+            components.push({ labelId, cells, area: cells.length });
+            labelId += 1;
         }
     }
 
-    return boundaries;
+    return components;
 }
 
-function distanceSqToWrappedSegment(px, py, a, b, gw) {
-    const dx = wrapDeltaX(b.x - a.x, gw);
-    const ax = a.x;
-    const ay = a.y;
-    const bx = ax + dx;
-    const by = b.y;
+function componentCenter(component, gw) {
+    const n = component.cells.length || 1;
+    let sumCos = 0;
+    let sumSin = 0;
+    let sumY = 0;
 
-    let minDistSq = Number.POSITIVE_INFINITY;
-    for (let shift = -1; shift <= 1; shift += 1) {
-        const x = px + shift * gw;
-        const vx = bx - ax;
-        const vy = by - ay;
-        const wx = x - ax;
-        const wy = py - ay;
-        const c1 = vx * wx + vy * wy;
-        let distSq;
+    for (let i = 0; i < component.cells.length; i += 1) {
+        const cell = component.cells[i];
+        const angle = (cell.x / gw) * Math.PI * 2;
+        sumCos += Math.cos(angle);
+        sumSin += Math.sin(angle);
+        sumY += cell.y;
+    }
 
-        if (c1 <= 0) {
-            const ex = x - ax;
-            const ey = py - ay;
-            distSq = ex * ex + ey * ey;
-        } else {
-            const c2 = vx * vx + vy * vy;
-            if (c2 <= c1) {
-                const ex = x - bx;
-                const ey = py - by;
-                distSq = ex * ex + ey * ey;
-            } else {
-                const t = c1 / (c2 || 1);
-                const projX = ax + vx * t;
-                const projY = ay + vy * t;
-                const ex = x - projX;
-                const ey = py - projY;
-                distSq = ex * ex + ey * ey;
+    const meanAngle = Math.atan2(sumSin / n, sumCos / n);
+    const normalized = meanAngle < 0 ? meanAngle + Math.PI * 2 : meanAngle;
+    return {
+        x: (normalized / (Math.PI * 2)) * gw,
+        y: sumY / n,
+    };
+}
+
+function buildContinentalSeeds(random, gw, gh, landMask, coastDistance) {
+    const components = labelLandComponents(landMask, gw, gh)
+        .sort((a, b) => b.area - a.area);
+
+    const seeds = [];
+    const minArea = Math.max(80, Math.floor(gw * gh * 0.012));
+    for (let i = 0; i < components.length; i += 1) {
+        if (components[i].area < minArea) {
+            continue;
+        }
+        seeds.push(componentCenter(components[i], gw));
+        if (seeds.length >= 4) {
+            break;
+        }
+    }
+
+    while (seeds.length < 2) {
+        const extra = randomInlandCell(random, gw, gh, landMask, coastDistance, 0.16, 220);
+        seeds.push({ x: extra.x, y: extra.y });
+    }
+
+    if (seeds.length > 4) {
+        return seeds.slice(0, 4);
+    }
+    return seeds;
+}
+
+function nearestSeedIndex(x, y, seeds, gw) {
+    let bestIndex = 0;
+    let bestD2 = Number.POSITIVE_INFINITY;
+
+    for (let i = 0; i < seeds.length; i += 1) {
+        const seed = seeds[i];
+        const dx = wrapDeltaX(x - seed.x, gw);
+        const dy = y - seed.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < bestD2) {
+            bestD2 = d2;
+            bestIndex = i;
+        }
+    }
+
+    return bestIndex;
+}
+
+function buildBoundaryDistanceField(landMask, gw, gh, seeds) {
+    const owner = new Int16Array(gw * gh);
+    owner.fill(-1);
+
+    for (let y = 0; y < gh; y += 1) {
+        for (let x = 0; x < gw; x += 1) {
+            const idx = indexOf(x, y, gw);
+            if (landMask[idx] === 0) {
+                continue;
+            }
+            owner[idx] = nearestSeedIndex(x, y, seeds, gw);
+        }
+    }
+
+    const boundaryMask = new Uint8Array(gw * gh);
+    for (let y = 0; y < gh; y += 1) {
+        for (let x = 0; x < gw; x += 1) {
+            const idx = indexOf(x, y, gw);
+            if (landMask[idx] === 0) {
+                continue;
+            }
+
+            const id = owner[idx];
+            let isBoundary = false;
+            for (let oy = -1; oy <= 1 && !isBoundary; oy += 1) {
+                for (let ox = -1; ox <= 1; ox += 1) {
+                    if (ox === 0 && oy === 0) {
+                        continue;
+                    }
+                    const ny = y + oy;
+                    if (ny < 0 || ny >= gh) {
+                        continue;
+                    }
+                    const nx = wrapX(x + ox, gw);
+                    const nIdx = indexOf(nx, ny, gw);
+                    if (landMask[nIdx] === 0) {
+                        continue;
+                    }
+                    if (owner[nIdx] !== id) {
+                        isBoundary = true;
+                        break;
+                    }
+                }
+            }
+
+            if (isBoundary) {
+                boundaryMask[idx] = 1;
             }
         }
-
-        minDistSq = Math.min(minDistSq, distSq);
     }
 
-    return minDistSq;
+    const dist = new Float32Array(gw * gh);
+    dist.fill(-1);
+    const qx = new Int32Array(gw * gh);
+    const qy = new Int32Array(gw * gh);
+    let head = 0;
+    let tail = 0;
+
+    for (let y = 0; y < gh; y += 1) {
+        for (let x = 0; x < gw; x += 1) {
+            const idx = indexOf(x, y, gw);
+            if (boundaryMask[idx] === 1) {
+                dist[idx] = 0;
+                qx[tail] = x;
+                qy[tail] = y;
+                tail += 1;
+            }
+        }
+    }
+
+    while (head < tail) {
+        const x = qx[head];
+        const y = qy[head];
+        head += 1;
+        const base = dist[indexOf(x, y, gw)];
+
+        for (let oy = -1; oy <= 1; oy += 1) {
+            for (let ox = -1; ox <= 1; ox += 1) {
+                if (ox === 0 && oy === 0) {
+                    continue;
+                }
+                const ny = y + oy;
+                if (ny < 0 || ny >= gh) {
+                    continue;
+                }
+                const nx = wrapX(x + ox, gw);
+                const nIdx = indexOf(nx, ny, gw);
+                if (landMask[nIdx] === 0 || dist[nIdx] !== -1) {
+                    continue;
+                }
+                dist[nIdx] = base + 1;
+                qx[tail] = nx;
+                qy[tail] = ny;
+                tail += 1;
+            }
+        }
+    }
+
+    let maxDist = 0;
+    for (let i = 0; i < dist.length; i += 1) {
+        if (dist[i] > maxDist) {
+            maxDist = dist[i];
+        }
+    }
+
+    const inv = maxDist > 0 ? 1 / maxDist : 0;
+    for (let i = 0; i < dist.length; i += 1) {
+        if (landMask[i] === 1 && dist[i] >= 0) {
+            dist[i] *= inv;
+        }
+    }
+
+    return dist;
 }
 
-function boundaryInfluenceAt(x, y, boundary, gw) {
-    let minDistSq = Number.POSITIVE_INFINITY;
-    const points = boundary.points;
-    for (let i = 0; i < points.length - 1; i += 1) {
-        const d2 = distanceSqToWrappedSegment(x, y, points[i], points[i + 1], gw);
-        minDistSq = Math.min(minDistSq, d2);
+function buildIsolatedPeaks(random, gw, gh, landMask, coastDistance) {
+    const peaks = [];
+    const peakCount = 2 + Math.floor(random() * 4);
+
+    for (let i = 0; i < peakCount; i += 1) {
+        const center = randomInlandCell(random, gw, gh, landMask, coastDistance, 0.12, 220);
+        peaks.push({
+            x: center.x + (random() * 2 - 1) * gw * 0.015,
+            y: center.y + (random() * 2 - 1) * gh * 0.015,
+            radius: gw * (0.016 + random() * 0.02),
+            amp: 0.22 + random() * 0.28,
+        });
     }
-    const width = boundary.width;
-    return Math.exp(-minDistSq / (2 * width * width)) * boundary.strength;
+
+    return peaks;
+}
+
+function singlePeakInfluence(x, y, peak, gw) {
+    const dx = wrapDeltaX(x - peak.x, gw);
+    const dy = y - peak.y;
+    const d2 = dx * dx + dy * dy;
+    const sigma2 = peak.radius * peak.radius;
+    return Math.exp(-d2 / (2 * sigma2)) * peak.amp;
 }
 
 export function buildElevationField(random, gw, gh, landMask) {
     const coastDistance = computeCoastDistanceField(landMask, gw, gh);
     const field = new Float32Array(gw * gh);
-    const boundaries = buildTectonicBoundaries(random, gw, gh, landMask, coastDistance);
-    const basins = [];
-    const basinChance = 0.62;
-    const basinEnabled = random() < basinChance;
-    const basinScale = 0.13 + random() * 0.15;
-    const basinStrength = basinEnabled ? 0.16 + random() * 0.18 : 0;
 
-    for (let i = 0; i < (basinEnabled ? 1 + Math.floor(random() * 3) : 0); i += 1) {
-        const center = randomInlandCell(random, gw, gh, landMask, coastDistance, 0.28, 180);
-        basins.push({
-            x: center.x + (random() * 2 - 1) * gw * 0.02,
-            y: center.y + (random() * 2 - 1) * gh * 0.02,
-            rx: gw * basinScale * (0.7 + random() * 0.9),
-            ry: gh * (basinScale * 0.62) * (0.7 + random() * 0.9),
-            amp: 0.5 + random() * 0.7,
-            phase: random() * Math.PI * 2,
-        });
-    }
+    const seeds = buildContinentalSeeds(random, gw, gh, landMask, coastDistance);
+    const boundaryDistance = buildBoundaryDistanceField(landMask, gw, gh, seeds);
+    const isolatedPeaks = buildIsolatedPeaks(random, gw, gh, landMask, coastDistance);
+    const coastalEdgeRidgeEnabled = random() < 0.33;
 
-    const coastBaseWeight = 0.3 + random() * 0.14;
-    const tectonicRidgeWeight = 0.58 + random() * 0.22;
-    const noiseStrength = 0.2;
-    const ridgeNoiseBlend = 0.8 + random() * 0.25;
-    const coastalSmoothness = 0.2;
+    const coastBaseWeight = 0.33 + random() * 0.15;
+    const boundaryRidgeWeight = 0.62 + random() * 0.22;
+    const isolatedPeakWeight = 0.36 + random() * 0.2;
+    const noiseStrength = 0.14 + random() * 0.08;
+    const coastalEdgeRidgeWeight = coastalEdgeRidgeEnabled ? 0.28 + random() * 0.2 : 0;
 
-    const f1x = 2.1 + random() * 1.3;
-    const f1y = 1.4 + random() * 1.3;
-    const f2x = 4.2 + random() * 2.2;
-    const f2y = 3.4 + random() * 2.0;
-    const p1 = random() * Math.PI * 2;
-    const p2 = random() * Math.PI * 2;
+    const ridgeWidth = 0.08 + random() * 0.06;
+    const ridgePhase = random() * Math.PI * 2;
+    const coastalBandCenter = 0.11 + random() * 0.06;
+    const coastalBandWidth = 0.055 + random() * 0.03;
+    const coastalGatePhase = random() * Math.PI * 2;
+    const coastalGateFx = 2.6 + random() * 1.8;
+    const coastalGateFy = 2.0 + random() * 1.6;
+    const f1x = 2.0 + random() * 1.2;
+    const f1y = 1.5 + random() * 1.2;
+    const f2x = 4.0 + random() * 2.0;
+    const f2y = 3.2 + random() * 1.8;
 
     let min = Number.POSITIVE_INFINITY;
     let max = Number.NEGATIVE_INFINITY;
@@ -274,44 +405,35 @@ export function buildElevationField(random, gw, gh, landMask) {
 
             const nx = x / gw;
             const baseHeight = coastDistance[idx];
-            const coastalFactor = smoothstep(0.02, coastalSmoothness, baseHeight);
+            const inlandFactor = smoothstep(0.06, 0.35, baseHeight);
+
+            const bDist = Math.max(0, boundaryDistance[idx]);
+            const ridgeCore = Math.exp(-(bDist * bDist) / (2 * ridgeWidth * ridgeWidth));
+            const ridgeWobble = 0.86 + 0.14 * Math.sin((nx * 8.0 + ny * 6.2) * Math.PI + ridgePhase);
+            const boundaryRidge = ridgeCore * ridgeWobble;
+
+            let peaks = 0;
+            for (let i = 0; i < isolatedPeaks.length; i += 1) {
+                peaks += singlePeakInfluence(x, y, isolatedPeaks[i], gw);
+            }
 
             let detailNoise = 0;
-            detailNoise += Math.sin((nx * f1x + ny * f1y) * Math.PI * 2 + p1) * 0.6;
-            detailNoise += Math.cos((nx * f2x - ny * f2y) * Math.PI * 2 + p2) * 0.3;
-            detailNoise += Math.sin((nx + ny) * Math.PI * 6.8 + p1 * 0.73) * 0.1;
-
-            let tectonicRidge = 0;
-            for (let i = 0; i < boundaries.length; i += 1) {
-                const influence = boundaryInfluenceAt(x, y, boundaries[i], gw);
-                if (boundaries[i].coastal) {
-                    tectonicRidge += influence * (0.86 + 0.14 * coastalFactor);
-                } else {
-                    tectonicRidge += influence * (0.72 + 0.28 * smoothstep(0.12, 0.7, baseHeight));
-                }
-            }
-
-            let basinTerm = 0;
-            for (let i = 0; i < basins.length; i += 1) {
-                const basin = basins[i];
-                const dx = x - basin.x;
-                const dy = y - basin.y;
-                const ex = (dx * dx) / ((basin.rx * basin.rx) || 1);
-                const ey = (dy * dy) / ((basin.ry * basin.ry) || 1);
-                const shape = Math.exp(-(ex + ey) * 0.5);
-                const waviness = 0.72 + 0.28 * Math.sin((nx * 8.4 + ny * 7.1) + basin.phase);
-                basinTerm += shape * waviness * basin.amp;
-            }
-
-            const inlandFactor = smoothstep(0.18, 0.55, baseHeight);
-            const basinDrop = Math.min(
-                basinStrength * basinTerm * inlandFactor,
-                0.33 * inlandFactor,
+            detailNoise += Math.sin((nx * f1x + ny * f1y) * Math.PI * 2 + ridgePhase) * 0.6;
+            detailNoise += Math.cos((nx * f2x - ny * f2y) * Math.PI * 2 + ridgePhase * 0.73) * 0.4;
+            const coastalBand = Math.exp(
+                -((baseHeight - coastalBandCenter) ** 2) / (2 * coastalBandWidth * coastalBandWidth),
             );
+            const coastalGateRaw = Math.sin(
+                (nx * coastalGateFx + ny * coastalGateFy) * Math.PI * 2 + coastalGatePhase,
+            ) * 0.5 + 0.5;
+            const coastalGate = smoothstep(0.48, 0.86, coastalGateRaw);
+            const coastalEdgeRidge = coastalBand * coastalGate;
+
             const elevation = coastBaseWeight * baseHeight
-                + noiseStrength * detailNoise * coastalFactor
-                + tectonicRidgeWeight * tectonicRidge * ridgeNoiseBlend
-                - basinDrop;
+                + boundaryRidgeWeight * boundaryRidge * inlandFactor
+                + isolatedPeakWeight * peaks
+                + coastalEdgeRidgeWeight * coastalEdgeRidge
+                + noiseStrength * detailNoise * smoothstep(0.02, 0.3, baseHeight);
 
             field[idx] = elevation;
             min = Math.min(min, elevation);
@@ -321,10 +443,9 @@ export function buildElevationField(random, gw, gh, landMask) {
 
     const invRange = max > min ? 1 / (max - min) : 0;
     for (let i = 0; i < field.length; i += 1) {
-        if (landMask[i] === 0) {
-            continue;
+        if (landMask[i] === 1) {
+            field[i] = clamp((field[i] - min) * invRange, 0, 1);
         }
-        field[i] = (field[i] - min) * invRange;
     }
 
     return { elevationField: field, coastDistance };
